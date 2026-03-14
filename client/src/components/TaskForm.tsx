@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { playSound, popEmoji, speak } from '@/lib/feedback';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -8,6 +9,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { Badge } from '@/components/ui/badge';
 import { Play, Square, Save, Clock, X, Check, Plus, Search } from 'lucide-react';
+import gamification from '@/lib/gamification';
+import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/context/AuthContext';
 
 interface Task {
@@ -35,21 +38,22 @@ interface TaskFormProps {
   onSave: (task: Task) => void;
   onCancel: () => void;
   existingTasks?: Task[];
-  user?: { role: string; employeeCode: string };
+  user?: { role: string; employeeCode: string; department?: string };
+  saveButtonText?: string;
 }
 
 const TOOLS_LIST = [
-  'Airtable', 'Android Studio', 'Angular', 'AWS', 'Azure',
+  'Adobe Scanner', 'Airtable', 'Android Studio', 'Angular', 'AWS', 'Azure',
   'Antigravity', 'Amazon', 'Bitbucket', 'BrowserStack', 'Calls/Phone',
   'Canva', 'ChatGPT', 'Chrome', 'Claude', 'Copilot', 'Whatsapp', 'Confluence', 'CSS', 'Docker',
   'Drizzle', 'Emails', 'ESLint', 'Excel', 'Express', 'Figma', 'Firebase', 'Firefox',
   'Flutter', 'Gemini', 'Git', 'GitHub', 'GitLab', 'Google', 'Google Calendar', 'Google Keep',
-  'Google Maps', 'Google Play Console', 'Google Tasks', 'Grafana', 'GSAP', 'Heroku', 'HTML',
-  'Indeed', 'InVision', 'JavaScript', 'Jenkins', 'Jest', 'Jira', 'Kubernetes', 'LinkedIn', 'Loom',
+  'Google Maps', 'Google Play Console', 'Google Tasks', 'Grafana', 'GSAP', 'GST Portal', 'Heroku', 'Hostinger', 'HTML',
+  'IncomeTax Portal', 'Indeed', 'InVision', 'JavaScript', 'Jenkins', 'Jest', 'Jira', 'Kubernetes', 'LinkedIn', 'Loom',
   'Lucide Icons', 'Meeting Others', 'Meeting with Teams', 'Miro', 'MongoDB', 'MS Office', 'MS Teams',
   'MySQL', 'Naukri', 'Netlify', 'Next.js', 'Node.js', 'Notes', 'Notion', 'OpenAI', 'Others', 'Outlook',
-  'Porter', 'PostgreSQL', 'Postman', 'PPT', 'Prettier', 'Prisma', 'React', 'Redis', 'Redux', 'Safari', 'Sentry',
-  'Shadcn/UI', 'Shine', 'Slack', 'Storybook', 'Supabase', 'Swift', 'Tailwind CSS', 'TanStack Query',
+  'Porter', 'PostgreSQL', 'Postman', 'Promilo', 'PPT', 'Prettier', 'Prisma', 'React', 'Redis', 'Redux', 'Safari', 'Sentry',
+  'Shadcn/UI', 'Shine', 'Slack', 'Storybook', 'Supabase', 'Swift', 'Tailwind CSS', 'TanStack Query', 'Traces',
   'TimeChamp', 'Trello', 'TypeScript', 'Unolo', 'Vercel', 'Vite', 'VS Code', 'Vue', 'Web Browser', 'Word',
   'WorkIndia', 'Wouter', 'XCode', 'Zapier', 'Zeplin', 'Zoho Books', 'Zoho Cliq', 'Zoho Expenses'
 ].sort();
@@ -60,7 +64,7 @@ type Project = {
   project_name: string;
 };
 
-export default function TaskForm({ task, onSave, onCancel, user }: TaskFormProps) {
+export default function TaskForm({ task, onSave, onCancel, user, saveButtonText }: TaskFormProps) {
   const { user: authUser } = useAuth();
   const [formData, setFormData] = useState<Task>({
     project: task?.project || '',
@@ -192,7 +196,9 @@ export default function TaskForm({ task, onSave, onCancel, user }: TaskFormProps
 
         const params = new URLSearchParams();
         params.append('projectId', selectedProject.project_code);
-        if (authUser?.department) params.append('userDepartment', authUser.department);
+        if (authUser?.department || user?.department) params.append('userDepartment', authUser?.department || user?.department || '');
+        if (authUser?.employeeCode || user?.employeeCode) params.append('userEmpCode', authUser?.employeeCode || user?.employeeCode || '');
+
         const res = await fetch(`/api/tasks?${params.toString()}`);
         const json = await res.json();
 
@@ -269,7 +275,9 @@ export default function TaskForm({ task, onSave, onCancel, user }: TaskFormProps
 
         const params = new URLSearchParams();
         params.append('taskId', selectedTask.id);
-        if (authUser?.department) params.append('userDepartment', authUser.department);
+        if (authUser?.department || user?.department) params.append('userDepartment', authUser?.department || user?.department || '');
+        if (authUser?.employeeCode || user?.employeeCode) params.append('userEmpCode', authUser?.employeeCode || user?.employeeCode || '');
+
         const res = await fetch(`/api/subtasks?${params.toString()}`);
         const json = await res.json();
 
@@ -323,6 +331,10 @@ export default function TaskForm({ task, onSave, onCancel, user }: TaskFormProps
     const errs: string[] = [];
     if (!formData.project) errs.push('Project is required');
     if (!formData.title) errs.push('Task is required');
+    // If subtasks exist, one must be selected
+    if (subtasks.length > 0 && !formData.subTask) {
+      errs.push('Sub Task selection is mandatory for this task');
+    }
     if (!formData.quantify) errs.push('Quantify is required');
     if (!formData.startTime) errs.push('Start time is required');
     if (!formData.endTime) errs.push('End time is required');
@@ -344,7 +356,23 @@ export default function TaskForm({ task, onSave, onCancel, user }: TaskFormProps
     // @ts-ignore
     if (formData.pmsId) payload.pmsId = formData.pmsId;
     if (formData.pmsSubtaskId) (payload as any).pmsSubtaskId = formData.pmsSubtaskId;
+    try { playSound('confirm'); popEmoji(document.querySelector('[data-testid="button-save-task"]') as HTMLElement, '💾'); } catch { };
     onSave(payload);
+    try {
+      playSound('hurray');
+      window.dispatchEvent(new CustomEvent('mascot:doll', { detail: { text: "Wow, really great!", x: 50, y: 30 } }));
+      speak('Wow, really great!');
+    } catch { }
+    try {
+      // Award points only when task marked complete (100%) — per-project
+      try {
+        if (formData.percentageComplete === 100 && formData.project) {
+          const projectId = formData.project;
+          const res = (require('@/lib/gamification') as any).addPointsForProject(projectId, 10, 'task-complete');
+          try { const { toast } = require('@/hooks/use-toast'); if (res.pointsAdded) toast({ title: `+${res.pointsAdded} pts`, description: `Great! You earned points for completing this task.` }); } catch { }
+        }
+      } catch (e) { }
+    } catch { }
   };
 
   return (
@@ -407,7 +435,16 @@ export default function TaskForm({ task, onSave, onCancel, user }: TaskFormProps
               <Label htmlFor="project" className="text-blue-100">Project *</Label>
               <Select
                 value={formData.project}
-                onValueChange={(v) => setFormData({ ...formData, project: v, title: '', subTask: '' })}
+                onValueChange={(v) => {
+                  setFormData({ ...formData, project: v, title: '', subTask: '' });
+                  try {
+                    // choose variant based on index so different projects produce slightly varied tones
+                    const idx = filteredProjects.findIndex(p => p.project_name === v);
+                    const variant = idx >= 0 ? (idx % 5) + 1 : undefined;
+                    playSound('select', variant);
+                    popEmoji(document.querySelector('[data-testid="select-project"]') as HTMLElement);
+                  } catch { }
+                }}
               >
                 <SelectTrigger className="bg-slate-700/50 border-blue-500/20 text-white" data-testid="select-project">
                   <SelectValue placeholder="Select a project" />
@@ -423,6 +460,11 @@ export default function TaskForm({ task, onSave, onCancel, user }: TaskFormProps
                       onKeyDown={(e) => e.stopPropagation()}
                     />
                   </div>
+                  {/* Ensure prefilled project is visible even if not in fetched list */}
+                  {/* Ensure prefilled project is visible even if not in fetched list */}
+                  {formData.project && !projects.find(p => p.project_name === formData.project) && (
+                    <SelectItem value={formData.project}>{formData.project}</SelectItem>
+                  )}
                   {filteredProjects.length > 0 ? (
                     filteredProjects.map(p => (
                       <SelectItem key={p.project_code} value={p.project_name}>{p.project_name}</SelectItem>
@@ -438,13 +480,25 @@ export default function TaskForm({ task, onSave, onCancel, user }: TaskFormProps
               <Label htmlFor="keyStep" className="text-blue-100">Key Step</Label>
               <Select
                 value={(formData as any).keyStep || ''}
-                onValueChange={(v) => setFormData({ ...formData, keyStep: v })}
+                onValueChange={(v) => {
+                  setFormData({ ...formData, keyStep: v });
+                  try {
+                    const idx = keySteps.findIndex(k => k.name === v);
+                    const variant = idx >= 0 ? (idx % 5) + 1 : undefined;
+                    playSound('select', variant);
+                    popEmoji(document.querySelector('[data-testid="select-keystep"]') as HTMLElement, '🔑');
+                  } catch { }
+                }}
               >
                 <SelectTrigger className="bg-slate-700/50 border-blue-500/20 text-white" data-testid="select-keystep">
                   <SelectValue placeholder="Select key step" />
                 </SelectTrigger>
                 <SelectContent className="max-h-[300px]">
-                  {keySteps.length === 0 && (
+                  {/* Ensure prefilled key step is visible even if not in fetched list */}
+                  {formData.keyStep && !keySteps.find(k => k.name === formData.keyStep) && (
+                    <SelectItem value={formData.keyStep}>{formData.keyStep}</SelectItem>
+                  )}
+                  {keySteps.length === 0 && !formData.keyStep && (
                     <div className="py-2 px-8 text-xs text-blue-400/40 italic">No key steps found for this project</div>
                   )}
                   {keySteps.map(k => (
@@ -460,12 +514,24 @@ export default function TaskForm({ task, onSave, onCancel, user }: TaskFormProps
               <Label htmlFor="title" className="text-blue-100">Task *</Label>
               <Select
                 value={formData.title}
-                onValueChange={(v) => setFormData({ ...formData, title: v, subTask: '' })}
+                onValueChange={(v) => {
+                  setFormData({ ...formData, title: v, subTask: '' });
+                  try {
+                    const idx = tasks.findIndex(t => t.task_name === v);
+                    const variant = idx >= 0 ? (idx % 5) + 1 : undefined;
+                    playSound('select', variant);
+                    popEmoji(document.querySelector('[data-testid="select-task"]') as HTMLElement, '🧩');
+                  } catch { }
+                }}
               >
                 <SelectTrigger className="bg-slate-700/50 border-blue-500/20 text-white" data-testid="select-task">
                   <SelectValue placeholder="Select a task" />
                 </SelectTrigger>
                 <SelectContent className="max-h-[200px]">
+                  {/* Ensure prefilled task is visible even if not in fetched list */}
+                  {formData.title && !tasks.find(t => t.task_name === formData.title) && (
+                    <SelectItem value={formData.title}>{formData.title}</SelectItem>
+                  )}
                   {tasks.length > 0 ? (
                     tasks.map(task => (
                       <SelectItem key={task.id} value={task.task_name}>{task.task_name}</SelectItem>
@@ -480,7 +546,9 @@ export default function TaskForm({ task, onSave, onCancel, user }: TaskFormProps
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="subTask" className="text-blue-100">Sub Task</Label>
+              <Label htmlFor="subTask" className="text-blue-100">
+                Sub Task {subtasks.length > 0 && <span className="text-red-400">*</span>}
+              </Label>
               <Select
                 value={formData.subTask}
                 onValueChange={(value) => {
@@ -490,6 +558,12 @@ export default function TaskForm({ task, onSave, onCancel, user }: TaskFormProps
                     subTask: value,
                     pmsSubtaskId: selected?.id
                   });
+                  try {
+                    const idx = subtasks.findIndex(s => s.title === value);
+                    const variant = idx >= 0 ? (idx % 5) + 1 : undefined;
+                    playSound('select', variant);
+                    popEmoji(document.querySelector('[data-testid="select-subtask"]') as HTMLElement, '📎');
+                  } catch { }
                 }}
                 data-testid="select-subtask"
               >
@@ -497,6 +571,10 @@ export default function TaskForm({ task, onSave, onCancel, user }: TaskFormProps
                   <SelectValue placeholder="Select a sub task" />
                 </SelectTrigger>
                 <SelectContent className="bg-slate-800 border-blue-500/20">
+                  {/* Ensure prefilled subtask is visible even if not in fetched list */}
+                  {formData.subTask && !subtasks.find(s => s.title === formData.subTask) && (
+                    <SelectItem value={formData.subTask}>{formData.subTask}</SelectItem>
+                  )}
                   {subtasks.length > 0 ? (
                     subtasks.map((subtask) => (
                       <SelectItem key={subtask.id} value={subtask.title}>{subtask.title}</SelectItem>
@@ -519,6 +597,23 @@ export default function TaskForm({ task, onSave, onCancel, user }: TaskFormProps
                 placeholder="Enter quantify (e.g., 5 reports, 10 calls)"
                 value={formData.quantify}
                 onChange={(e) => setFormData({ ...formData, quantify: e.target.value })}
+                onFocus={(e) => { try { playSound('confirm'); if (Math.random() < 0.5) { speak('Tell me the numbers — how many?'); const el = (e.target || e.currentTarget) as HTMLElement | null; if (el) { const r = el.getBoundingClientRect(); window.dispatchEvent(new CustomEvent('mascot:showNear', { detail: { text: 'Tell me the numbers — how many?', rect: { left: r.left, top: r.top, width: r.width, height: r.height } } })); } } } catch { } }}
+                onBlur={() => {
+                  try {
+                    if (formData.quantify && formData.quantify.trim().length > 0) {
+                      playSound('confirm', 2);
+                      window.dispatchEvent(new CustomEvent('mascot:doll', { detail: { text: "Nice numbers!", x: 70, y: 60 } }));
+                      speak('Haha! Nice numbers.');
+                      const el = document.querySelector('[data-testid="input-quantify"]') as HTMLElement | null;
+                      if (el) {
+                        const rect = el.getBoundingClientRect();
+                        const detail = { text: `Haha! Nice — ${formData.quantify}`, rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height } };
+                        console.debug('[TaskForm] dispatching mascot:showNear (blur quantify)', detail);
+                        window.dispatchEvent(new CustomEvent('mascot:showNear', { detail }));
+                      }
+                    }
+                  } catch { }
+                }}
                 className="bg-slate-700/50 border-blue-500/20 text-white"
                 data-testid="input-quantify"
               />
@@ -531,6 +626,21 @@ export default function TaskForm({ task, onSave, onCancel, user }: TaskFormProps
                 placeholder="What did you accomplish?"
                 value={formData.achievements}
                 onChange={(e) => setFormData({ ...formData, achievements: e.target.value })}
+                onFocus={(e) => {
+                  try {
+                    playSound('confirm');
+                    speak('Hey! Tell me what you achieved today.');
+                    const el = (e.target || e.currentTarget) as HTMLElement | null;
+                    const rect = el ? el.getBoundingClientRect() : null;
+                    if (rect && Math.random() < 0.5) {
+                      // pass a plain object with the rect numbers to avoid cross-origin serialization issues
+                      const detail = { text: 'Tell me, what did you achieve?', rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height } };
+                      console.debug('[TaskForm] dispatching mascot:showNear', detail);
+                      window.dispatchEvent(new CustomEvent('mascot:showNear', { detail }));
+                    }
+                  } catch { }
+                }}
+                onBlur={() => { try { if (formData.achievements && formData.achievements.trim().length > 0) { playSound('wow'); window.dispatchEvent(new CustomEvent('mascot:doll', { detail: { text: "Amazing!", x: 30, y: 65 } })); speak('Wow, really great! Keep it up.'); popEmoji(document.querySelector('[data-testid="input-achievements"]') as HTMLElement, '🎉'); } } catch { } }}
                 className="bg-slate-700/50 border-blue-500/20 text-white"
                 data-testid="input-achievements"
               />
@@ -545,6 +655,8 @@ export default function TaskForm({ task, onSave, onCancel, user }: TaskFormProps
                 placeholder="Enter any problems or issues faced"
                 value={formData.problemAndIssues}
                 onChange={(e) => setFormData({ ...formData, problemAndIssues: e.target.value })}
+                onFocus={(e) => { try { playSound('select', 2); if (Math.random() < 0.4) { speak('Any blockers? Tell me the problem.'); const el = (e.target || e.currentTarget) as HTMLElement | null; if (el) { const r = el.getBoundingClientRect(); window.dispatchEvent(new CustomEvent('mascot:showNear', { detail: { text: 'Any blockers? Tell me the problem.', rect: { left: r.left, top: r.top, width: r.width, height: r.height } } })); } } } catch { } }}
+                onBlur={() => { try { if (formData.problemAndIssues && formData.problemAndIssues.trim().length > 0) { playSound('confirm'); speak('Thanks for noting that — you are thorough.'); } } catch { } }}
                 className="bg-slate-700/50 border-blue-500/20 text-white"
                 data-testid="input-problem-issues"
               />
@@ -557,6 +669,8 @@ export default function TaskForm({ task, onSave, onCancel, user }: TaskFormProps
                 placeholder="Areas for improvement"
                 value={formData.scopeOfImprovements}
                 onChange={(e) => setFormData({ ...formData, scopeOfImprovements: e.target.value })}
+                onFocus={(e) => { try { playSound('select', 3); if (Math.random() < 0.4) { speak('How can this get even better?'); const el = (e.target || e.currentTarget) as HTMLElement | null; if (el) { const r = el.getBoundingClientRect(); window.dispatchEvent(new CustomEvent('mascot:showNear', { detail: { text: 'How can this get even better?', rect: { left: r.left, top: r.top, width: r.width, height: r.height } } })); } } } catch { } }}
+                onBlur={() => { try { if (formData.scopeOfImprovements && formData.scopeOfImprovements.trim().length > 0) { playSound('confirm'); speak('Great improvement idea — small steps make a difference.'); } } catch { } }}
                 className="bg-slate-700/50 border-blue-500/20 text-white"
                 data-testid="input-scope-improvements"
               />
@@ -575,6 +689,10 @@ export default function TaskForm({ task, onSave, onCancel, user }: TaskFormProps
                 const words = e.target.value.trim().split(/\s+/).filter(w => w.length > 0);
                 if (words.length <= 35) {
                   setFormData({ ...formData, description: e.target.value });
+                  if (words.length === 20) {
+                    playSound('wow');
+                    window.dispatchEvent(new CustomEvent('mascot:doll', { detail: { text: "Love the detail!", x: 80, y: 70 } }));
+                  }
                 }
               }}
               className="bg-slate-700/50 border-blue-500/20 text-white resize-none"
@@ -636,7 +754,14 @@ export default function TaskForm({ task, onSave, onCancel, user }: TaskFormProps
                   min="0"
                   max="100"
                   value={formData.percentageComplete}
-                  onChange={(e) => setFormData({ ...formData, percentageComplete: Math.min(100, Math.max(0, parseInt(e.target.value) || 0)) })}
+                  onChange={(e) => {
+                    const val = Math.min(100, Math.max(0, parseInt(e.target.value) || 0));
+                    setFormData({ ...formData, percentageComplete: val });
+                    if (val === 100) {
+                      playSound('hurray');
+                      window.dispatchEvent(new CustomEvent('mascot:doll', { detail: { text: "Hurray! 100%!", x: 50, y: 20 } }));
+                    }
+                  }}
                   className="bg-slate-700/50 border-blue-500/20 text-white text-center"
                   data-testid="input-percentage"
                 />
@@ -721,7 +846,7 @@ export default function TaskForm({ task, onSave, onCancel, user }: TaskFormProps
               data-testid="button-save-task"
             >
               <Save className="w-4 h-4 mr-2" />
-              Save Task
+              {saveButtonText || 'Save Task'}
             </Button>
           </div>
         </form>

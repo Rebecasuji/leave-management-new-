@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useLocation } from 'wouter';
+import { useQuery, useMutation } from '@tanstack/react-query';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -7,39 +8,46 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Calendar as CalendarComponent } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import TaskForm from '@/components/TaskForm';
 import {
   Search,
   Filter,
   RefreshCw,
-  Download,
   Clock,
-  Check,
-  X,
   User as UserIcon,
   ChevronDown,
   ChevronUp,
   FileSpreadsheet,
   Calendar as CalendarIcon,
   Loader2,
-  MessageSquare
+  AlertCircle,
+  X,
+  MoreVertical,
+  RotateCcw,
+  Edit,
+  Trash2
 } from 'lucide-react';
 import { User } from '@/context/AuthContext';
 import { useToast } from '@/hooks/use-toast';
+import { apiRequest, queryClient } from '@/lib/queryClient';
 import type { TimeEntry, Employee } from '@shared/schema';
 import { format } from 'date-fns';
-import * as XLSX from 'xlsx';
 
-interface ReportsPageProps {
+interface RejectionsPageProps {
   user: User;
 }
 
-export default function ReportsPage({ user }: ReportsPageProps) {
+export default function RejectionsPage({ user }: RejectionsPageProps) {
+  const [, setLocation] = useLocation();
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [dateFilter, setDateFilter] = useState<string>('all');
   const [specificDate, setSpecificDate] = useState<Date | undefined>(undefined);
   const [expandedEmployee, setExpandedEmployee] = useState<string | null>(null);
+  const [editingEntry, setEditingEntry] = useState<TimeEntry | null>(null);
 
   // Determine if user is an employee (can only see their own reports)
   const isEmployee = user.role === 'employee';
@@ -54,20 +62,47 @@ export default function ReportsPage({ user }: ReportsPageProps) {
     queryKey: ['/api/employees'],
   });
 
-  const getEmployeeInfo = (employeeId: string) => {
-    return employees.find(e => e.id === employeeId);
-  };
-
   const getApproverName = (approverId: string | null) => {
     if (!approverId) return 'N/A';
     const approver = employees.find(e => e.id === approverId);
     return approver ? approver.name : approverId;
   };
 
+  const handleReopen = async (entryId: string) => {
+    try {
+      await apiRequest('PATCH', `/api/time-entries/${entryId}/reopen`);
+      queryClient.invalidateQueries({ queryKey: isEmployee ? ['/api/time-entries/employee', user.id] : ['/api/time-entries'] });
+      toast({
+        title: "Entry Reopened",
+        description: "Status reset to pending.",
+      });
+    } catch (error) {
+      toast({ title: "Error", description: "Failed to reopen entry.", variant: "destructive" });
+    }
+  };
+
+  const handleDelete = async (entryId: string) => {
+    try {
+      await apiRequest('DELETE', `/api/time-entries/${entryId}`);
+      queryClient.invalidateQueries({ queryKey: isEmployee ? ['/api/time-entries/employee', user.id] : ['/api/time-entries'] });
+      toast({
+        title: "Entry Deleted",
+        description: "Timesheet entry has been removed.",
+      });
+    } catch (error) {
+      toast({ title: "Error", description: "Failed to delete entry.", variant: "destructive" });
+    }
+  };
+
   const filteredEntries = timeEntries.filter(entry => {
+    // ONLY show rejected and resubmitted items
+    if (entry.status !== 'rejected' && entry.status !== 'resubmitted') return false;
+
     const matchesSearch =
       entry.employeeName.toLowerCase().includes(searchQuery.toLowerCase()) ||
       entry.employeeCode.toLowerCase().includes(searchQuery.toLowerCase());
+
+    // For status filter, 'all' on this page means 'rejected' + 'resubmitted'
     const matchesStatus = statusFilter === 'all' || entry.status === statusFilter;
 
     let matchesDate = true;
@@ -114,84 +149,29 @@ export default function ReportsPage({ user }: ReportsPageProps) {
 
   const getStatusBadge = (status: string) => {
     switch (status) {
-      case 'pending':
-        return <Badge className="bg-yellow-500/20 text-yellow-400 border-yellow-500/30">Pending</Badge>;
-      case 'manager_approved':
-        return <Badge className="bg-blue-500/20 text-blue-400 border-blue-500/30">Manager Approved</Badge>;
-      case 'approved':
-        return <Badge className="bg-green-500/20 text-green-400 border-green-500/30">Approved</Badge>;
       case 'rejected':
         return <Badge className="bg-red-500/20 text-red-400 border-red-500/30">Rejected</Badge>;
-      case 'on_hold':
-        return <Badge className="bg-orange-500/20 text-orange-400 border-orange-500/30">On Hold</Badge>;
+      case 'resubmitted':
+        return <Badge className="bg-orange-500/20 text-orange-400 border-orange-500/30 animate-pulse">Resubmitted</Badge>;
       default:
         return <Badge>{status}</Badge>;
     }
   };
 
-  const handleExportToExcel = () => {
-    const exportData = filteredEntries.map(entry => ({
-      'Employee Code': entry.employeeCode,
-      'Employee Name': entry.employeeName,
-      'Date': entry.date,
-      'Project': entry.projectName,
-      'Task': entry.taskDescription,
-      'Start Time': entry.startTime,
-      'End Time': entry.endTime,
-      'Total Hours': entry.totalHours,
-      'Completion %': entry.percentageComplete ?? 0,
-      'Status': entry.status,
-      'Manager Approved By': entry.managerApprovedBy ? getApproverName(entry.managerApprovedBy) : 'N/A',
-      'Manager Approved At': entry.managerApprovedAt ? format(new Date(entry.managerApprovedAt), 'yyyy-MM-dd HH:mm') : 'N/A',
-      'Admin Approved By': entry.approvedBy ? getApproverName(entry.approvedBy) : 'N/A',
-      'Admin Approved At': entry.approvedAt ? format(new Date(entry.approvedAt), 'yyyy-MM-dd HH:mm') : 'N/A',
-      'Rejection Reason': entry.rejectionReason || 'N/A',
-      'Approval Comment': entry.approvalComment || 'N/A',
-      'Submitted At': entry.submittedAt ? format(new Date(entry.submittedAt), 'yyyy-MM-dd HH:mm') : 'N/A',
-    }));
-
-    if (exportData.length === 0) {
-      toast({
-        title: "No Data",
-        description: "There are no entries to export.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.json_to_sheet(exportData);
-    ws['!cols'] = [
-      { wch: 14 }, { wch: 20 }, { wch: 12 }, { wch: 20 }, { wch: 40 },
-      { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 15 },
-      { wch: 18 }, { wch: 18 }, { wch: 18 }, { wch: 18 }, { wch: 30 },
-      { wch: 30 }, { wch: 18 },
-    ];
-    XLSX.utils.book_append_sheet(wb, ws, 'Timesheet Reports');
-    XLSX.writeFile(wb, `TimesheetReports_${format(new Date(), 'yyyyMMdd')}.xlsx`);
-
-    toast({
-      title: "Export Successful",
-      description: `Downloaded ${exportData.length} entries as Excel file.`,
-    });
-  };
-
-  const totalApproved = timeEntries.filter(e => e.status === 'approved').length;
-  const totalRejected = timeEntries.filter(e => e.status === 'rejected').length;
-  const totalOnHold = timeEntries.filter(e => e.status === 'on_hold').length;
-  const totalPending = timeEntries.filter(e => e.status === 'pending' || e.status === 'manager_approved').length;
+  const totalRejected = filteredEntries.filter(e => e.status === 'rejected').length;
+  const totalResubmitted = filteredEntries.filter(e => e.status === 'resubmitted').length;
 
   return (
-    <div className="p-4 md:p-6 space-y-6" data-testid="reports-page">
+    <div className="p-4 md:p-6 space-y-6" data-testid="rejections-page">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-white" style={{ fontFamily: 'Space Grotesk' }}>
-            {isEmployee ? 'My Reports' : 'Timesheet Reports'}
+            {isEmployee ? 'My Rejections' : 'Timesheet Rejections'}
           </h1>
           <p className="text-blue-200/60 text-sm">
             {isEmployee
-              ? 'View your timesheet status, approvals, and detailed reports'
-              : 'View employee timesheet status, approvals, and detailed reports'}
+              ? 'View your rejected timesheet entries and their feedback'
+              : 'Review rejected entries and monitor resubmission status across the team'}
           </p>
         </div>
 
@@ -200,56 +180,22 @@ export default function ReportsPage({ user }: ReportsPageProps) {
             variant="outline"
             className="bg-slate-800 border-blue-500/20 text-white"
             onClick={() => refetch()}
-            data-testid="button-refresh-reports"
           >
             <RefreshCw className="w-4 h-4 mr-2" />
             Refresh
           </Button>
-          <Button
-            onClick={handleExportToExcel}
-            className="bg-gradient-to-r from-green-600 to-emerald-600"
-            disabled={filteredEntries.length === 0}
-            data-testid="button-export-reports"
-          >
-            <Download className="w-4 h-4 mr-2" />
-            Export
-          </Button>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card className="bg-slate-800/50 border-blue-500/20 p-4">
           <div className="flex items-center gap-3">
             <div className="p-2 rounded-lg bg-blue-500/20">
-              <FileSpreadsheet className="w-5 h-5 text-blue-400" />
+              <AlertCircle className="w-5 h-5 text-blue-400" />
             </div>
             <div>
-              <p className="text-xs text-blue-200/60">Total Entries</p>
-              <p className="text-2xl font-bold text-blue-400">{timeEntries.length}</p>
-            </div>
-          </div>
-        </Card>
-
-        <Card className="bg-slate-800/50 border-green-500/20 p-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-green-500/20">
-              <Check className="w-5 h-5 text-green-400" />
-            </div>
-            <div>
-              <p className="text-xs text-blue-200/60">Approved</p>
-              <p className="text-2xl font-bold text-green-400">{totalApproved}</p>
-            </div>
-          </div>
-        </Card>
-
-        <Card className="bg-slate-800/50 border-yellow-500/20 p-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-yellow-500/20">
-              <Clock className="w-5 h-5 text-yellow-400" />
-            </div>
-            <div>
-              <p className="text-xs text-blue-200/60">Pending</p>
-              <p className="text-2xl font-bold text-yellow-400">{totalPending}</p>
+              <p className="text-xs text-blue-200/60">Total Action Items</p>
+              <p className="text-2xl font-bold text-blue-400">{filteredEntries.length}</p>
             </div>
           </div>
         </Card>
@@ -260,7 +206,7 @@ export default function ReportsPage({ user }: ReportsPageProps) {
               <X className="w-5 h-5 text-red-400" />
             </div>
             <div>
-              <p className="text-xs text-blue-200/60">Rejected</p>
+              <p className="text-xs text-blue-200/60">Active Rejections</p>
               <p className="text-2xl font-bold text-red-400">{totalRejected}</p>
             </div>
           </div>
@@ -272,8 +218,8 @@ export default function ReportsPage({ user }: ReportsPageProps) {
               <Clock className="w-5 h-5 text-orange-400" />
             </div>
             <div>
-              <p className="text-xs text-blue-200/60">On Hold</p>
-              <p className="text-2xl font-bold text-orange-400">{totalOnHold}</p>
+              <p className="text-xs text-blue-200/60">Resubmitted</p>
+              <p className="text-2xl font-bold text-orange-400">{totalResubmitted}</p>
             </div>
           </div>
         </Card>
@@ -289,33 +235,23 @@ export default function ReportsPage({ user }: ReportsPageProps) {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="pl-10 bg-slate-700/50 border-blue-500/20 text-white"
-                data-testid="input-search-reports"
               />
             </div>
 
             <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger
-                className="w-full sm:w-40 bg-slate-700/50 border-blue-500/20 text-white"
-                data-testid="select-status-filter"
-              >
+              <SelectTrigger className="w-full sm:w-40 bg-slate-700/50 border-blue-500/20 text-white">
                 <Filter className="w-4 h-4 mr-2" />
                 <SelectValue placeholder="Status" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All Status</SelectItem>
-                <SelectItem value="pending">Pending</SelectItem>
-                <SelectItem value="manager_approved">Manager Approved</SelectItem>
-                <SelectItem value="approved">Approved</SelectItem>
+                <SelectItem value="all">All Rejections</SelectItem>
                 <SelectItem value="rejected">Rejected</SelectItem>
-                <SelectItem value="on_hold">On Hold</SelectItem>
+                <SelectItem value="resubmitted">Resubmitted</SelectItem>
               </SelectContent>
             </Select>
 
             <Select value={dateFilter} onValueChange={(v) => { setDateFilter(v); if (v !== 'all') setSpecificDate(undefined); }}>
-              <SelectTrigger
-                className="w-full sm:w-40 bg-slate-700/50 border-blue-500/20 text-white"
-                data-testid="select-date-filter"
-              >
+              <SelectTrigger className="w-full sm:w-40 bg-slate-700/50 border-blue-500/20 text-white">
                 <CalendarIcon className="w-4 h-4 mr-2" />
                 <SelectValue placeholder="Date Range" />
               </SelectTrigger>
@@ -332,7 +268,6 @@ export default function ReportsPage({ user }: ReportsPageProps) {
                 <Button
                   variant="outline"
                   className={`w-full sm:w-auto bg-slate-700/50 border-blue-500/20 text-white ${specificDate ? 'border-blue-400' : ''}`}
-                  data-testid="button-specific-date"
                 >
                   <CalendarIcon className="w-4 h-4 mr-2" />
                   {specificDate ? format(specificDate, 'MMM d, yyyy') : 'Select Date'}
@@ -350,12 +285,7 @@ export default function ReportsPage({ user }: ReportsPageProps) {
                 />
                 {specificDate && (
                   <div className="p-2 border-t border-blue-500/20">
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="w-full text-blue-300"
-                      onClick={() => setSpecificDate(undefined)}
-                    >
+                    <Button size="sm" variant="ghost" className="w-full text-blue-300" onClick={() => setSpecificDate(undefined)}>
                       Clear Date
                     </Button>
                   </div>
@@ -373,30 +303,24 @@ export default function ReportsPage({ user }: ReportsPageProps) {
       ) : employeeList.length === 0 ? (
         <Card className="bg-slate-800/50 border-blue-500/20 p-12 text-center">
           <FileSpreadsheet className="w-12 h-12 text-blue-400/40 mx-auto mb-4" />
-          <p className="text-blue-200/60">No timesheet entries found.</p>
+          <p className="text-blue-200/60">No rejection records found.</p>
         </Card>
       ) : (
         <div className="space-y-4">
           {employeeList.map(group => {
             const isExpanded = expandedEmployee === group.employeeId;
-            const approvedCount = group.entries.filter(e => e.status === 'approved').length;
             const rejectedCount = group.entries.filter(e => e.status === 'rejected').length;
-            const onHoldCount = group.entries.filter(e => e.status === 'on_hold').length;
-            const pendingCount = group.entries.filter(e => e.status === 'pending' || e.status === 'manager_approved').length;
+            const resubmittedCount = group.entries.filter(e => e.status === 'resubmitted').length;
 
             return (
-              <Card
-                key={group.employeeId}
-                className="bg-slate-800/50 border-blue-500/20 overflow-hidden"
-                data-testid={`card-employee-${group.employeeId}`}
-              >
+              <Card key={group.employeeId} className="bg-slate-800/50 border-blue-500/20 overflow-hidden">
                 <div
                   className="p-4 cursor-pointer hover:bg-slate-700/30 transition-colors"
                   onClick={() => setExpandedEmployee(isExpanded ? null : group.employeeId)}
                 >
                   <div className="flex items-center justify-between gap-4">
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center">
+                      <div className="w-10 h-10 rounded-full bg-gradient-to-br from-red-500 to-orange-500 flex items-center justify-center">
                         <UserIcon className="w-5 h-5 text-white" />
                       </div>
                       <div>
@@ -407,17 +331,11 @@ export default function ReportsPage({ user }: ReportsPageProps) {
 
                     <div className="flex items-center gap-4">
                       <div className="flex gap-2">
-                        <Badge className="bg-green-500/20 text-green-400 border-green-500/30">
-                          {approvedCount} Approved
-                        </Badge>
-                        <Badge className="bg-yellow-500/20 text-yellow-400 border-yellow-500/30">
-                          {pendingCount} Pending
-                        </Badge>
                         <Badge className="bg-red-500/20 text-red-400 border-red-500/30">
                           {rejectedCount} Rejected
                         </Badge>
                         <Badge className="bg-orange-500/20 text-orange-400 border-orange-500/30">
-                          {onHoldCount} On Hold
+                          {resubmittedCount} Resubmitted
                         </Badge>
                       </div>
                       {isExpanded ? (
@@ -432,20 +350,39 @@ export default function ReportsPage({ user }: ReportsPageProps) {
                 {isExpanded && (
                   <div className="border-t border-blue-500/20 p-4 space-y-3">
                     {group.entries.map(entry => (
-                      <div
-                        key={entry.id}
-                        className="bg-slate-700/30 rounded-lg p-4 space-y-3"
-                        data-testid={`entry-${entry.id}`}
-                      >
+                      <div key={entry.id} className="bg-slate-700/30 rounded-lg p-4 space-y-3">
                         <div className="flex items-start justify-between gap-4">
                           <div className="flex-1">
                             <div className="flex items-center gap-2 mb-2">
-                              {getStatusBadge(entry.status || 'pending')}
-                              <span className="text-sm text-blue-200/60">{entry.date}</span>
+                              {getStatusBadge(entry.status || 'rejected')}
+                              <span className="text-sm font-medium text-blue-200/80">{entry.date}</span>
                             </div>
-                            <p className="text-white font-medium">{entry.projectName}</p>
-                            <p className="text-sm text-blue-200/80">{entry.taskDescription}</p>
+                            <h3 className="text-base text-white font-bold tracking-tight mb-1">{entry.projectName}</h3>
+                            <p className="text-sm text-blue-100 font-medium leading-relaxed">{entry.taskDescription}</p>
                           </div>
+
+                          {/* Action Dropdown Menu */}
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="ghost" size="icon" className="h-9 w-9 bg-slate-800/80 text-blue-400 hover:text-white hover:bg-blue-500/30 border border-blue-500/20 shadow-sm flex-shrink-0">
+                                <MoreVertical className="w-5 h-5" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="w-48 bg-slate-800 border-blue-500/20 shadow-xl">
+                              <DropdownMenuItem className="text-blue-100 focus:bg-blue-500/20 cursor-pointer py-2" onClick={() => setEditingEntry(entry)}>
+                                <Edit className="w-4 h-4 mr-2 text-blue-400" />
+                                Edit & Resubmit
+                              </DropdownMenuItem>
+                              <DropdownMenuItem className="text-blue-100 focus:bg-blue-500/20 cursor-pointer py-2" onClick={() => handleReopen(entry.id.toString())}>
+                                <RotateCcw className="w-4 h-4 mr-2 text-yellow-400" />
+                                Reopen as Pending
+                              </DropdownMenuItem>
+                              <DropdownMenuItem className="text-red-400 focus:bg-red-500/20 focus:text-red-300 cursor-pointer py-2" onClick={() => handleDelete(entry.id.toString())}>
+                                <Trash2 className="w-4 h-4 mr-2" />
+                                Delete Action
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                         </div>
 
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
@@ -467,49 +404,14 @@ export default function ReportsPage({ user }: ReportsPageProps) {
                           </div>
                         </div>
 
-                        {entry.status === 'approved' && (
-                          <div className="bg-green-500/10 rounded p-3 space-y-2">
-                            <p className="text-sm text-green-400 font-medium">Approval Details</p>
-                            {entry.managerApprovedBy && (
-                              <p className="text-xs text-blue-200/80">
-                                Manager Approved by: {getApproverName(entry.managerApprovedBy)}
-                                {entry.managerApprovedAt && ` on ${format(new Date(entry.managerApprovedAt), 'MMM d, yyyy HH:mm')}`}
-                              </p>
-                            )}
-                            {entry.approvedBy && (
-                              <p className="text-xs text-blue-200/80">
-                                Admin Approved by: {getApproverName(entry.approvedBy)}
-                                {entry.approvedAt && ` on ${format(new Date(entry.approvedAt), 'MMM d, yyyy HH:mm')}`}
-                              </p>
-                            )}
-                            {entry.approvalComment && (
-                              <p className="text-xs text-blue-200/80">
-                                Comment: {entry.approvalComment}
-                              </p>
-                            )}
-                          </div>
-                        )}
-
-                        {entry.status === 'manager_approved' && (
-                          <div className="bg-blue-500/10 rounded p-3 space-y-2">
-                            <p className="text-sm text-blue-400 font-medium">Manager Approved - Pending Admin</p>
-                            {entry.managerApprovedBy && (
-                              <p className="text-xs text-blue-200/80">
-                                Manager: {getApproverName(entry.managerApprovedBy)}
-                                {entry.managerApprovedAt && ` on ${format(new Date(entry.managerApprovedAt), 'MMM d, yyyy HH:mm')}`}
-                              </p>
-                            )}
-                          </div>
-                        )}
-
                         {entry.status === 'rejected' && (
                           <div className="bg-red-500/10 rounded p-3 space-y-2">
-                            <p className="text-sm text-red-400 font-medium">Rejection Details</p>
+                            <p className="text-sm text-red-400 font-medium">Rejection Reason</p>
                             <p className="text-xs text-blue-200/80">
-                              Reason: {entry.rejectionReason || 'No reason provided'}
+                              {entry.rejectionReason || 'No specific reason provided.'}
                             </p>
                             {entry.approvedBy && (
-                              <p className="text-xs text-blue-200/80">
+                              <p className="text-xs text-red-300/60 mt-1">
                                 Rejected by: {getApproverName(entry.approvedBy)}
                                 {entry.approvedAt && ` on ${format(new Date(entry.approvedAt), 'MMM d, yyyy HH:mm')}`}
                               </p>
@@ -517,35 +419,7 @@ export default function ReportsPage({ user }: ReportsPageProps) {
                           </div>
                         )}
 
-                        {entry.status === 'on_hold' && (
-                          <div className="bg-orange-500/10 rounded p-3 space-y-3">
-                            <div className="flex items-start justify-between">
-                              <div>
-                                <p className="text-sm text-orange-400 font-medium">On Hold Details</p>
-                                <p className="text-xs text-blue-200/80 mt-1">
-                                  Reason: {entry.onHoldReason || 'No reason provided'}
-                                </p>
-                              </div>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="h-7 text-[10px] bg-orange-500/10 border-orange-500/20 text-orange-400 hover:bg-orange-500/20"
-                                onClick={() => window.location.href = `/discussion?entryId=${entry.id}`}
-                              >
-                                <MessageSquare className="w-3 h-3 mr-1" />
-                                Discuss
-                              </Button>
-                            </div>
-                            {entry.approvedBy && (
-                              <p className="text-[10px] text-blue-200/40">
-                                Put on hold by: {getApproverName(entry.approvedBy)}
-                                {entry.approvedAt && ` on ${format(new Date(entry.approvedAt), 'MMM d, yyyy HH:mm')}`}
-                              </p>
-                            )}
-                          </div>
-                        )}
-
-                        <div className="text-xs text-blue-200/40">
+                        <div className="text-xs text-blue-200/40 pt-2 border-t border-slate-700/50">
                           Submitted: {entry.submittedAt ? format(new Date(entry.submittedAt), 'MMM d, yyyy HH:mm') : 'N/A'}
                         </div>
                       </div>
@@ -557,6 +431,97 @@ export default function ReportsPage({ user }: ReportsPageProps) {
           })}
         </div>
       )}
+
+      {/* Edit & Resubmit Dialog */}
+      <Dialog open={!!editingEntry} onOpenChange={(open) => !open && setEditingEntry(null)}>
+        <DialogContent className="max-w-4xl bg-slate-900 border-blue-500/20 max-h-[90vh] overflow-y-auto p-6 md:p-8">
+          <DialogHeader className="mb-4">
+            <DialogTitle className="text-2xl font-bold text-white tracking-tight">Edit & Resubmit Time Entry</DialogTitle>
+            <DialogDescription className="text-blue-200/60 mt-1">
+              Update the details of your requested timesheet entry to reflect the necessary changes.
+            </DialogDescription>
+          </DialogHeader>
+
+          {editingEntry && (() => {
+            const parts = editingEntry.taskDescription.split(' | ');
+            let parsed = { title: '', subTask: '', description: '' };
+            if (parts.length >= 2) {
+              parsed = { title: parts[0], subTask: parts[1], description: parts.slice(2).join(' | ') };
+            } else {
+              const colonParts = editingEntry.taskDescription.split(':');
+              parsed = { title: colonParts[0] || editingEntry.taskDescription, subTask: '', description: colonParts[1]?.trim() || '' };
+            }
+
+            const durationMatch = editingEntry.totalHours ? editingEntry.totalHours.match(/(\d+)h\s*(\d+)m?/) : null;
+            const durationMinutes = durationMatch ? parseInt(durationMatch[1]) * 60 + parseInt(durationMatch[2] || '0') : 0;
+
+            const taskToEdit = {
+              id: editingEntry.id.toString(),
+              project: editingEntry.projectName,
+              title: parsed.title,
+              subTask: parsed.subTask,
+              keyStep: (editingEntry as any).keyStep || '',
+              description: parsed.description,
+              problemAndIssues: (editingEntry as any).problemAndIssues || '',
+              quantify: (editingEntry as any).quantify || '',
+              achievements: (editingEntry as any).achievements || '',
+              scopeOfImprovements: (editingEntry as any).scopeOfImprovements || '',
+              toolsUsed: (editingEntry as any).toolsUsed || [],
+              startTime: editingEntry.startTime,
+              endTime: editingEntry.endTime,
+              percentageComplete: editingEntry.percentageComplete ?? 0,
+              durationMinutes: durationMinutes,
+              pmsId: editingEntry.pmsId || undefined,
+              pmsSubtaskId: editingEntry.pmsSubtaskId || undefined,
+            };
+
+            return (
+              <TaskForm
+                task={taskToEdit}
+                saveButtonText="Resubmit"
+                onSave={async (taskData) => {
+                  try {
+                    const startParts = taskData.startTime.split(':').map(Number);
+                    const endParts = taskData.endTime.split(':').map(Number);
+                    const durationInMins = (endParts[0] * 60 + endParts[1]) - (startParts[0] * 60 + startParts[1]);
+
+                    const formatDuration = (minutes: number) => `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+                    const formatTaskDescription = (t: any) => {
+                      let desc = t.title;
+                      if (t.subTask) desc += ' | ' + t.subTask;
+                      else desc += ' | ';
+                      if (t.description) desc += ' | ' + t.description;
+                      return desc;
+                    };
+
+                    await apiRequest('PATCH', `/api/time-entries/${editingEntry.id}/resubmit`, {
+                      projectName: taskData.project,
+                      taskDescription: formatTaskDescription(taskData),
+                      problemAndIssues: taskData.problemAndIssues || '',
+                      quantify: taskData.quantify || '',
+                      achievements: taskData.achievements || '',
+                      scopeOfImprovements: taskData.scopeOfImprovements || '',
+                      toolsUsed: taskData.toolsUsed || [],
+                      startTime: taskData.startTime,
+                      endTime: taskData.endTime,
+                      totalHours: formatDuration(durationInMins),
+                      percentageComplete: taskData.percentageComplete || 0,
+                    });
+
+                    queryClient.invalidateQueries({ queryKey: isEmployee ? ['/api/time-entries/employee', user.id] : ['/api/time-entries'] });
+                    toast({ title: "Resubmitted Successfully", description: "Your task has been updated and sent for manager approval." });
+                    setEditingEntry(null);
+                  } catch (e) {
+                    toast({ title: "Error Resubmitting", description: "Failed to resubmit entry. Please try again.", variant: "destructive" });
+                  }
+                }}
+                onCancel={() => setEditingEntry(null)}
+                user={{ role: user.role, employeeCode: user.employeeCode, department: (user as any).department }}
+              />
+            );
+          })()}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

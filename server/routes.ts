@@ -7,6 +7,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { pool } from './db';
 import { pmsPool } from './pmsSupabase';
+import { getLMSHours } from './lmsSupabase';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -44,6 +45,38 @@ function isProjectExpired(endDate: string | null): boolean {
     console.error("Error parsing project end date:", endDate, error);
     return false;
   }
+}
+
+async function enrichEntry(e: any) {
+  let keyStepName: string | null = null;
+  let pmsStartDate: string | null = null;
+  let pmsEndDate: string | null = null;
+  try {
+    let taskId = null;
+    if (e.pmsSubtaskId) {
+      const subRes = await pmsPool.query('SELECT task_id FROM subtasks WHERE id = $1::uuid', [e.pmsSubtaskId]);
+      if (subRes.rows && subRes.rows.length > 0) {
+        taskId = subRes.rows[0].task_id;
+      }
+    } else if (e.pmsId) {
+      taskId = e.pmsId;
+    }
+
+    if (taskId) {
+      const taskRes = await pmsPool.query('SELECT key_step_id, start_date, end_date FROM project_tasks WHERE id = $1::uuid', [taskId]);
+      if (taskRes.rows && taskRes.rows.length > 0) {
+        pmsStartDate = taskRes.rows[0].start_date;
+        pmsEndDate = taskRes.rows[0].end_date;
+        if (taskRes.rows[0].key_step_id) {
+          const keyRes = await pmsPool.query('SELECT title FROM key_steps WHERE id = $1::uuid', [taskRes.rows[0].key_step_id]);
+          if (keyRes.rows && keyRes.rows.length > 0) keyStepName = keyRes.rows[0].title;
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[PMS-ENRICH] failed to resolve key step for entry', e.id, err);
+  }
+  return { ...e, keyStep: keyStepName, pmsStartDate, pmsEndDate };
 }
 
 export async function registerRoutes(
@@ -394,11 +427,29 @@ export async function registerRoutes(
     }
   });
 
+  // ============ LMS ROUTES ============
+  app.get("/api/lms/hours", async (req, res) => {
+    try {
+      const { employeeCode, date } = req.query;
+      if (!employeeCode || !date) {
+        return res.status(400).json({ error: "employeeCode and date are required" });
+      }
+      const hours = await getLMSHours(employeeCode as string, date as string);
+      res.json(hours);
+    } catch (error) {
+      console.error("Get LMS hours error:", error);
+      res.status(500).json({ error: "Failed to fetch LMS hours" });
+    }
+  });
+
   // ============ TIME ENTRY ROUTES ============
   app.get("/api/time-entries", async (req, res) => {
     try {
       const entries = await storage.getTimeEntries();
-      res.json(entries);
+
+      // Enrich entries with key step name from PMS (if linked via pmsId or pmsSubtaskId)
+      const enriched = await Promise.all(entries.map(e => enrichEntry(e)));
+      res.json(enriched);
     } catch (error) {
       console.error("Get time entries error:", error);
       res.status(500).json({ error: "Failed to fetch time entries" });
@@ -418,10 +469,24 @@ export async function registerRoutes(
   app.get("/api/time-entries/employee/:employeeId", async (req, res) => {
     try {
       const entries = await storage.getTimeEntriesByEmployee(req.params.employeeId);
-      res.json(entries);
+      const enriched = await Promise.all(entries.map(e => enrichEntry(e)));
+      res.json(enriched);
     } catch (error) {
       console.error("Get employee entries error:", error);
       res.status(500).json({ error: "Failed to fetch employee entries" });
+    }
+  });
+
+  app.get("/api/time-entries/:id", async (req, res) => {
+    try {
+      const entry = await storage.getTimeEntry(req.params.id);
+      if (!entry) {
+        return res.status(404).json({ error: "Time entry not found" });
+      }
+      res.json(await enrichEntry(entry));
+    } catch (error) {
+      console.error("Get time entry error:", error);
+      res.status(500).json({ error: "Failed to fetch time entry" });
     }
   });
 
@@ -459,30 +524,23 @@ export async function registerRoutes(
 
       // Handle PMS Status Synchronization
       try {
-        console.log(`[PMS-SYNC] Starting sync. pmsId: ${req.body.pmsId}, pmsSubtaskId: ${req.body.pmsSubtaskId}`);
-        const { updateSubtaskInPMS, checkAndMarkTaskCompleted, updateTaskInPMS } = await import('./pmsSupabase');
+        console.log(`[PMS-SYNC] Starting sync. pmsId: ${req.body.pmsId}, pmsSubtaskId: ${req.body.pmsSubtaskId}, progress: ${entryData.percentageComplete}%`);
+        const { updateSubtaskProgress, updateTaskProgress } = await import('./pmsSupabase');
 
-        // CASE 1: Subtask completion
+        // CASE 1: Subtask exists - update subtask progress (triggers bottom-up update)
         if (req.body.pmsSubtaskId) {
-          console.log(`[PMS-SYNC] Attempting to mark subtask ${req.body.pmsSubtaskId} as completed`);
-          const subtaskResult = await updateSubtaskInPMS(req.body.pmsSubtaskId, true);
-          console.log(`[PMS-SYNC] Subtask update result:`, subtaskResult ? 'SUCCESS' : 'FAILED');
-
-          if (req.body.pmsId) {
-            console.log(`[PMS-SYNC] Checking parent task ${req.body.pmsId} for completion`);
-            await checkAndMarkTaskCompleted(req.body.pmsId);
-          }
+          console.log(`[PMS-SYNC] Updating subtask ${req.body.pmsSubtaskId} progress`);
+          await updateSubtaskProgress(req.body.pmsSubtaskId, entryData.percentageComplete);
         }
-        // CASE 2: No subtask - mark task itself as completed on submission
+        // CASE 2: No subtask - update task progress directly (triggers bottom-up update)
         else if (req.body.pmsId) {
-          console.log(`[PMS-SYNC] Marking task ${req.body.pmsId} as completed (no subtask)`);
-          const taskResult = await updateTaskInPMS(req.body.pmsId, { status: 'Completed' });
-          console.log(`[PMS-SYNC] Task update result:`, taskResult ? 'SUCCESS' : 'FAILED');
+          console.log(`[PMS-SYNC] Updating task ${req.body.pmsId} progress (no subtask)`);
+          await updateTaskProgress(req.body.pmsId, entryData.percentageComplete);
         } else {
           console.log(`[PMS-SYNC] No pmsId or pmsSubtaskId provided. Skipping sync.`);
         }
       } catch (pmsSyncError) {
-        console.error("[PMS-SYNC] Error during status synchronization:", pmsSyncError);
+        console.error("[PMS-SYNC] Error during progress synchronization:", pmsSyncError);
         // We don't fail the request if PMS sync fails, but we log it
       }
 
@@ -556,11 +614,16 @@ export async function registerRoutes(
         return res.status(404).json({ error: "Time entry not found" });
       }
 
-      if (entry.status !== 'pending') {
-        return res.status(400).json({ error: "Cannot edit entry that is not pending" });
+      if (entry.status !== 'pending' && entry.status !== 'rejected') {
+        return res.status(400).json({ error: "Cannot edit entry that is not pending or rejected" });
       }
 
-      const updatedEntry = await storage.updateTimeEntry(id, req.body);
+      // If it was rejected, reset status to pending upon update
+      const updateData = entry.status === 'rejected'
+        ? { ...req.body, status: 'pending', rejectionReason: null }
+        : req.body;
+
+      const updatedEntry = await storage.updateTimeEntry(id, updateData);
       broadcast("time_entry_updated", updatedEntry);
       res.json(updatedEntry);
     } catch (error) {
@@ -608,10 +671,43 @@ export async function registerRoutes(
         return res.status(404).json({ error: "Employee not found" });
       }
 
-      const totalHours = dailyEntries.reduce((sum, entry) => {
-        const hours = parseFloat(entry.totalHours);
-        return sum + (isNaN(hours) ? 0 : hours);
+      const parseDurationToMinutes = (duration: string): number => {
+        if (!duration) return 0;
+        const match = duration.match(/(\d+)h\s*(\d+)m?/);
+        if (match) {
+          return parseInt(match[1], 10) * 60 + parseInt(match[2] || '0', 10);
+        }
+        const hours = parseFloat(duration);
+        return isNaN(hours) ? 0 : Math.round(hours * 60);
+      };
+
+      const formatDuration = (minutes: number): string => {
+        const hours = Math.floor(minutes / 60);
+        const mins = minutes % 60;
+        return `${hours}h ${mins}m`;
+      };
+
+      const totalMinutes = dailyEntries.reduce((sum, entry) => {
+        return sum + parseDurationToMinutes(entry.totalHours);
       }, 0);
+
+      // Fetch LMS hours to validate 8-hour rule
+      const lmsData = await getLMSHours(employee.employeeCode, date);
+      const totalLMSMinutes = Math.round(lmsData.totalLMSHours * 60);
+      const combinedMinutes = totalMinutes + totalLMSMinutes;
+      const targetMinutes = 8 * 60;
+
+      if (combinedMinutes < targetMinutes) {
+        return res.status(400).json({ 
+          error: "Insufficient hours", 
+          message: `Total hours (Work: ${formatDuration(totalMinutes)} + LMS: ${formatDuration(totalLMSMinutes)}) must reach 8 hours. Currently: ${formatDuration(combinedMinutes)}`,
+          workMinutes: totalMinutes,
+          lmsMinutes: totalLMSMinutes,
+          totalMinutes: combinedMinutes
+        });
+      }
+
+      const totalHoursFormatted = formatDuration(totalMinutes);
 
       // use the raw entries as tasks so the email helper has full data
       const tasks = dailyEntries;
@@ -621,7 +717,7 @@ export async function registerRoutes(
         employeeName: employee.name,
         employeeCode: employee.employeeCode,
         date,
-        totalHours: totalHours.toFixed(2),
+        totalHours: totalHoursFormatted,
         tasks,
         status: 'pending',
       });
@@ -638,7 +734,7 @@ export async function registerRoutes(
         success: true,
         message: `Daily summary email sent for ${date} with ${dailyEntries.length} tasks`,
         taskCount: dailyEntries.length,
-        totalHours: totalHours.toFixed(2),
+        totalHours: totalHoursFormatted,
         emailId: emailResult.result?.id,
       });
     } catch (error) {
@@ -773,6 +869,82 @@ export async function registerRoutes(
     }
   });
 
+  app.patch("/api/time-entries/:id/reopen", async (req, res) => {
+    try {
+      const entry = await storage.reopenTimeEntry(req.params.id);
+      if (!entry) {
+        return res.status(404).json({ error: "Time entry not found" });
+      }
+      broadcast("time_entry_updated", entry);
+      res.json(entry);
+    } catch (error) {
+      console.error("Reopen entry error:", error);
+      res.status(500).json({ error: "Failed to reopen entry" });
+    }
+  });
+
+  app.patch("/api/time-entries/:id/resubmit", async (req, res) => {
+    try {
+      const entry = await storage.resubmitTimeEntry(req.params.id, req.body);
+      if (!entry) {
+        return res.status(404).json({ error: "Time entry not found" });
+      }
+      broadcast("time_entry_updated", entry);
+      res.json(entry);
+    } catch (error) {
+      console.error("Resubmit entry error:", error);
+      res.status(500).json({ error: "Failed to resubmit entry" });
+    }
+  });
+
+  app.patch("/api/time-entries/:id/on-hold", async (req, res) => {
+    try {
+      const { reason, managerId } = req.body;
+      if (!reason || !managerId) {
+        return res.status(400).json({ error: "Reason and managerId are required" });
+      }
+      const entry = await storage.onHoldTimeEntry(req.params.id, reason, managerId);
+      if (!entry) {
+        return res.status(404).json({ error: "Time entry not found" });
+      }
+      broadcast("time_entry_updated", entry);
+      res.json(entry);
+    } catch (error) {
+      console.error("On-hold entry error:", error);
+      res.status(500).json({ error: "Failed to set entry on hold" });
+    }
+  });
+
+  // ============ DISCUSSION ROUTES ============
+  app.get("/api/discussions", async (req, res) => {
+    try {
+      const { entryId, employeeId } = req.query;
+      let discussions;
+      if (entryId) {
+        discussions = await storage.getDiscussionsByEntry(entryId as string);
+      } else if (employeeId) {
+        discussions = await storage.getDiscussionsByEmployee(employeeId as string);
+      } else {
+        discussions = await storage.getAllDiscussions();
+      }
+      res.json(discussions);
+    } catch (error) {
+      console.error("Get discussions error:", error);
+      res.status(500).json({ error: "Failed to fetch discussions" });
+    }
+  });
+
+  app.post("/api/discussions", async (req, res) => {
+    try {
+      const discussion = await storage.createDiscussion(req.body);
+      broadcast("new_discussion", discussion);
+      res.json(discussion);
+    } catch (error) {
+      console.error("Create discussion error:", error);
+      res.status(500).json({ error: "Failed to create discussion" });
+    }
+  });
+
   // ============ NOTIFICATION ROUTES ============
   app.post("/api/notifications/timesheet-submitted", async (req, res) => {
     try {
@@ -787,7 +959,24 @@ export async function registerRoutes(
         return res.status(404).json({ error: "No tasks found for that date" });
       }
 
-      const totalHours = allTasks.reduce((acc, t) => acc + parseFloat(t.totalHours || "0"), 0).toFixed(2);
+      const parseDurationToMinutes = (duration: string): number => {
+        if (!duration) return 0;
+        const match = duration.match(/(\d+)h\s*(\d+)m?/);
+        if (match) {
+          return parseInt(match[1], 10) * 60 + parseInt(match[2] || '0', 10);
+        }
+        const hours = parseFloat(duration);
+        return isNaN(hours) ? 0 : Math.round(hours * 60);
+      };
+
+      const formatDuration = (minutes: number): string => {
+        const hours = Math.floor(minutes / 60);
+        const mins = minutes % 60;
+        return `${hours}h ${mins}m`;
+      };
+
+      const totalMinutes = allTasks.reduce((acc, t) => acc + parseDurationToMinutes(t.totalHours || "0"), 0);
+      const totalHours = formatDuration(totalMinutes);
 
       try {
         const { sendTimesheetSummaryEmail } = await import('./email');
@@ -858,9 +1047,9 @@ export async function registerRoutes(
 
   app.get("/api/tasks", async (req, res) => {
     try {
-      const { projectId, userDepartment } = req.query;
+      const { projectId, userDepartment, userEmpCode } = req.query;
       const { getTasks } = await import('./pmsSupabase');
-      const tasks = await getTasks(projectId as string, userDepartment as string);
+      const tasks = await getTasks(projectId as string, userDepartment as string, userEmpCode as string);
       res.json(tasks);
     } catch (error) {
       console.error("PMS tasks error:", error);
@@ -897,7 +1086,7 @@ export async function registerRoutes(
       const includeProjectTasks = !!settings.blockUnassignedProjectTasks;
 
       for (const project of projects) {
-        const tasks = await getTasks(project.project_code, userDept);
+        const tasks = await getTasks(project.project_code, userDept, employee.employeeCode);
         for (const t of tasks) {
           // determine assignee match
           const assignedTo = (t.assignee || (t as any).assigned_to || '').toString();
@@ -1143,9 +1332,9 @@ export async function registerRoutes(
 
   app.get("/api/subtasks", async (req, res) => {
     try {
-      const { taskId, userDepartment } = req.query;
+      const { taskId, userDepartment, userEmpCode } = req.query;
       const { getSubtasks } = await import('./pmsSupabase');
-      const subtasks = await getSubtasks(taskId as string, userDepartment as string);
+      const subtasks = await getSubtasks(taskId as string, userDepartment as string, userEmpCode as string);
       res.json(subtasks);
     } catch (error) {
       console.error("PMS subtasks error:", error);
@@ -1192,12 +1381,12 @@ export async function registerRoutes(
       const todayKey = formatDateLocal(new Date());
 
       for (const project of projects) {
-        console.log("[AVAILABLE-TASKS] Fetching tasks for project:", project.project_code);
-        const projectTasks = await getTasks(project.project_code, userDepartment);
-        console.log("[AVAILABLE-TASKS] Total tasks retrieved for project:", projectTasks.length);
+        console.log(`[AVAILABLE-TASKS] Fetching tasks for project: ${project.project_code} (${project.project_name}) for employee: ${employee.employeeCode}`);
+        const projectTasks = await getTasks(project.project_code, userDepartment, employee.employeeCode);
+        console.log(`[AVAILABLE-TASKS] Total tasks retrieved for project ${project.project_code}: ${projectTasks.length}`);
 
         // Filter out completed tasks
-        const activeTasks = projectTasks.filter((task: any) => task.status !== 'Completed');
+        const activeTasks = projectTasks;
         console.log("[AVAILABLE-TASKS] Active tasks for project:", activeTasks.length);
         if (activeTasks.length === 0) {
           console.log("[AVAILABLE-TASKS] All tasks for this project are completed.");
@@ -1244,6 +1433,65 @@ export async function registerRoutes(
     } catch (error) {
       console.error('Get settings error:', error);
       res.status(500).json({ error: 'Failed to get settings' });
+    }
+  });
+
+  // Project points storage endpoints (safe: creates its own table if missing)
+  app.get('/api/project-points/:projectId', async (req, res) => {
+    try {
+      const projectId = req.params.projectId;
+      // ensure table exists
+      try {
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS project_points (
+            project_id text PRIMARY KEY,
+            points integer NOT NULL DEFAULT 0,
+            last_active timestamptz
+          )`);
+      } catch (e) { /* ignore */ }
+
+      const q = await pool.query('SELECT project_id as "projectId", points, last_active as "lastActive" FROM project_points WHERE project_id = $1', [projectId]);
+      if (q.rows && q.rows.length > 0) return res.json(q.rows[0]);
+      return res.json({ projectId, points: 0, lastActive: null });
+    } catch (err) {
+      console.error('Get project points error:', err);
+      res.status(500).json({ error: 'Failed to fetch project points' });
+    }
+  });
+
+  // Patch project points: body { delta?: number, set?: number, touchLastActive?: boolean }
+  app.patch('/api/project-points/:projectId', async (req, res) => {
+    try {
+      const projectId = req.params.projectId;
+      const { delta, set, touchLastActive } = req.body || {};
+
+      try {
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS project_points (
+            project_id text PRIMARY KEY,
+            points integer NOT NULL DEFAULT 0,
+            last_active timestamptz
+          )`);
+      } catch (e) { /* ignore */ }
+
+      // upsert logic
+      if (typeof set === 'number') {
+        await pool.query(`INSERT INTO project_points (project_id, points, last_active) VALUES ($1, $2, $3) ON CONFLICT (project_id) DO UPDATE SET points = EXCLUDED.points, last_active = EXCLUDED.last_active`, [projectId, Math.max(0, Math.floor(set)), touchLastActive ? new Date() : null]);
+      } else if (typeof delta === 'number') {
+        // update points by delta, clamp at 0
+        const cur = await pool.query('SELECT points FROM project_points WHERE project_id = $1', [projectId]);
+        const prev = (cur.rows && cur.rows[0] && typeof cur.rows[0].points === 'number') ? parseInt(cur.rows[0].points) : 0;
+        const next = Math.max(0, prev + Math.floor(delta));
+        await pool.query(`INSERT INTO project_points (project_id, points, last_active) VALUES ($1, $2, $3) ON CONFLICT (project_id) DO UPDATE SET points = $2, last_active = COALESCE($3, project_points.last_active)`, [projectId, next, touchLastActive ? new Date() : null]);
+      } else {
+        return res.status(400).json({ error: 'delta or set required' });
+      }
+
+      const q = await pool.query('SELECT project_id as "projectId", points, last_active as "lastActive" FROM project_points WHERE project_id = $1', [projectId]);
+      return res.json(q.rows && q.rows[0] ? q.rows[0] : { projectId, points: 0, lastActive: null });
+    } catch (err) {
+      console.error('Patch project points error:', err);
+      res.status(500).json({ error: 'Failed to update project points' });
     }
   });
 

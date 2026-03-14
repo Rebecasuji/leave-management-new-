@@ -4,13 +4,18 @@ import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Edit2, Trash2, Check, Clock, MoreHorizontal } from 'lucide-react';
+import { Edit2, Trash2, Check, Clock, MoreHorizontal, RotateCcw, SendHorizontal } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
 
 export interface Task {
   id: string;
@@ -30,7 +35,9 @@ export interface Task {
   durationMinutes: number;
   percentageComplete: number;
   isComplete: boolean;
-  serverStatus?: 'draft' | 'pending' | 'manager_approved' | 'approved' | 'rejected';
+  serverStatus?: 'draft' | 'pending' | 'manager_approved' | 'approved' | 'rejected' | 'resubmitted';
+  date?: string;
+  rejectionReason?: string;
 }
 
 interface TaskTableProps {
@@ -38,9 +45,11 @@ interface TaskTableProps {
   onEdit: (task: Task) => void;
   onDelete: (taskId: string) => void;
   onComplete: (taskId: string) => void;
+  onReopen?: (task: Task) => void;
+  onResubmit?: (task: Task) => void;
 }
 
-export default function TaskTable({ tasks, onEdit, onDelete, onComplete }: TaskTableProps) {
+export default function TaskTable({ tasks, onEdit, onDelete, onComplete, onReopen, onResubmit }: TaskTableProps) {
   const formatDuration = (minutes: number) => {
     const hrs = Math.floor(minutes / 60);
     const mins = minutes % 60;
@@ -65,33 +74,35 @@ export default function TaskTable({ tasks, onEdit, onDelete, onComplete }: TaskT
   }
 
   return (
-    <Card className="bg-slate-800/50 border-blue-500/20 overflow-hidden">
+    <div className="glass-card rounded-2xl overflow-hidden border-none animate-in fade-in slide-in-from-bottom-2 duration-700">
       <div className="overflow-x-auto">
         <Table>
           <TableHeader>
-            <TableRow className="border-blue-500/20 hover:bg-transparent">
-              <TableHead className="text-blue-300">Project</TableHead>
-              <TableHead className="text-blue-300">Title</TableHead>
-              <TableHead className="text-blue-300">Status</TableHead>
-              <TableHead className="text-blue-300">Time</TableHead>
-              <TableHead className="text-blue-300">Duration</TableHead>
-              <TableHead className="text-blue-300 hidden md:table-cell">Progress</TableHead>
-              <TableHead className="text-blue-300 text-right">Actions</TableHead>
+            <TableRow className="border-white/5 hover:bg-transparent bg-white/5">
+              <TableHead className="text-blue-200/50 font-bold uppercase tracking-wider text-[10px] py-4">Project</TableHead>
+              <TableHead className="text-blue-200/50 font-bold uppercase tracking-wider text-[10px] py-4">Title</TableHead>
+              <TableHead className="text-blue-200/50 font-bold uppercase tracking-wider text-[10px] py-4">Status</TableHead>
+              <TableHead className="text-blue-200/50 font-bold uppercase tracking-wider text-[10px] py-4">Time</TableHead>
+              <TableHead className="text-blue-200/50 font-bold uppercase tracking-wider text-[10px] py-4">Duration</TableHead>
+              <TableHead className="text-blue-200/50 font-bold uppercase tracking-wider text-[10px] py-4 hidden md:table-cell">Progress</TableHead>
+              <TableHead className="text-blue-200/50 font-bold uppercase tracking-wider text-[10px] py-4 text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {tasks.map((task) => (
               <TableRow
                 key={task.id}
-                className="border-blue-500/10 hover:bg-slate-700/30"
+                className="border-white/5 hover:bg-white/5 transition-all duration-300 group"
                 data-testid={`row-task-${task.id}`}
               >
-                <TableCell className="font-medium text-white">
-                  <div className="flex items-center gap-2">
-                    {task.isComplete && (
-                      <div className="w-2 h-2 rounded-full bg-green-500" />
+                <TableCell>
+                  <div className="space-y-1">
+                    <p className="font-bold text-white text-sm">{task.project}</p>
+                    {task.date && (
+                      <Badge variant="outline" className="text-[9px] px-1.5 h-4 border-white/5 text-blue-200/40 font-mono">
+                        {task.date}
+                      </Badge>
                     )}
-                    {task.project}
                   </div>
                 </TableCell>
                 <TableCell>
@@ -109,19 +120,38 @@ export default function TaskTable({ tasks, onEdit, onDelete, onComplete }: TaskT
                 </TableCell>
                 <TableCell>
                   {task.serverStatus === 'draft' && (
-                    <Badge className="bg-slate-600 text-slate-200">Draft</Badge>
+                    <Badge className="bg-slate-500/10 text-slate-300 border-slate-500/20 px-2 py-0 rounded-md text-[10px] font-bold uppercase">Draft</Badge>
                   )}
                   {task.serverStatus === 'pending' && (
-                    <Badge className="bg-yellow-600 text-yellow-100">Pending</Badge>
+                    <Badge className="bg-amber-500/10 text-amber-300 border-amber-500/20 px-2 py-0 rounded-md text-[10px] font-bold uppercase">Pending</Badge>
                   )}
                   {task.serverStatus === 'manager_approved' && (
-                    <Badge className="bg-blue-600 text-blue-100">Manager Approved</Badge>
+                    <Badge className="bg-cyan-500/10 text-cyan-300 border-cyan-500/20 px-2 py-0 rounded-md text-[10px] font-bold uppercase">Manager Approved</Badge>
                   )}
                   {task.serverStatus === 'approved' && (
-                    <Badge className="bg-green-600 text-green-100">Approved</Badge>
+                    <Badge className="bg-emerald-500/10 text-emerald-300 border-emerald-500/20 px-2 py-0 rounded-md text-[10px] font-bold uppercase">Approved</Badge>
                   )}
                   {task.serverStatus === 'rejected' && (
-                    <Badge className="bg-red-600 text-red-100">Rejected</Badge>
+                    <div className="flex flex-col gap-1">
+                      <Badge className="bg-rose-500/10 text-rose-300 border-rose-500/20 px-2 py-0 rounded-md text-[10px] font-bold uppercase w-fit">Rejected</Badge>
+                      <span className="text-[9px] text-rose-400 font-bold uppercase tracking-tighter animate-pulse">Needs Rectification</span>
+                      {task.rejectionReason && (
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <Button variant="ghost" className="p-0 h-auto text-[10px] text-rose-400/80 hover:text-rose-400 underline decoration-rose-400/30 flex items-center justify-start h-5 px-1">
+                              View Reason
+                            </Button>
+                          </PopoverTrigger>
+                          <PopoverContent className="bg-slate-900 border-rose-500/20 text-blue-100 p-3 w-64 shadow-2xl">
+                            <h4 className="text-[10px] font-bold text-rose-400 uppercase mb-2">Rejection Reason</h4>
+                            <p className="text-xs leading-relaxed">{task.rejectionReason}</p>
+                          </PopoverContent>
+                        </Popover>
+                      )}
+                    </div>
+                  )}
+                  {task.serverStatus === 'resubmitted' && (
+                    <Badge className="bg-amber-500/10 text-amber-300 border-amber-500/20 px-2 py-0 rounded-md text-[10px] font-bold uppercase">Resubmitted</Badge>
                   )}
                 </TableCell>
                 <TableCell>
@@ -140,15 +170,15 @@ export default function TaskTable({ tasks, onEdit, onDelete, onComplete }: TaskT
                   <div className="flex items-center gap-2 min-w-[100px]">
                     <Progress
                       value={task.percentageComplete}
-                      className="h-2 bg-slate-700"
+                      className="h-1.5 bg-white/5"
                     />
-                    <span className="text-xs text-blue-200 w-8">
+                    <span className="text-[11px] font-mono text-blue-200/40 w-8">
                       {task.percentageComplete}%
                     </span>
                   </div>
                 </TableCell>
                 <TableCell className="text-right">
-                  {(task.serverStatus === 'draft' || task.serverStatus === 'pending') ? (
+                  {(task.serverStatus === 'draft' || task.serverStatus === 'pending' || task.serverStatus === 'rejected') ? (
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button
@@ -167,8 +197,19 @@ export default function TaskTable({ tasks, onEdit, onDelete, onComplete }: TaskT
                           data-testid={`button-edit-${task.id}`}
                         >
                           <Edit2 className="w-4 h-4 mr-2" />
-                          Edit
+                          {task.serverStatus === 'rejected' ? 'Reopen & Edit' : 'Edit'}
                         </DropdownMenuItem>
+
+                        {task.serverStatus === 'rejected' && onResubmit && (
+                          <DropdownMenuItem
+                            onClick={() => onResubmit(task)}
+                            className="text-emerald-400 focus:bg-slate-700 focus:text-emerald-300"
+                          >
+                            <SendHorizontal className="w-4 h-4 mr-2" />
+                            Quick Resubmit
+                          </DropdownMenuItem>
+                        )}
+
                         {task.serverStatus === 'draft' && !task.isComplete && (
                           <DropdownMenuItem
                             onClick={() => onComplete(task.id)}
@@ -198,6 +239,6 @@ export default function TaskTable({ tasks, onEdit, onDelete, onComplete }: TaskT
           </TableBody>
         </Table>
       </div>
-    </Card>
+    </div>
   );
 }

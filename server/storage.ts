@@ -10,6 +10,7 @@ import {
   projects,
   tasks,
   subtasks,
+  discussions,
   // <-- corrected
   type Organisation,
   type InsertOrganisation,
@@ -25,7 +26,9 @@ import {
   type InsertGroup,
   type Project,     // <-- keep type
   type Task,        // <-- keep type
-  type Subtask      // <-- keep type
+  type Subtask,      // <-- keep type
+  type Discussion,
+  type InsertDiscussion
 } from "@shared/schema";
 import { getProjects as getPMSProjects, getTasks as getPMSTasks, getTasksByProject as getPMSTasksByProject, getSubtasks as getPMSSubtasks, type PMSProject, type PMSTask, type PMSSubtask } from "./pmsSupabase";
 import bcrypt from "bcryptjs";
@@ -103,6 +106,13 @@ export interface IStorage {
   seedManagers(): Promise<void>;
   seedDefaultEmployees(): Promise<void>;
   getAllTaskPostponements(): Promise<any[]>;
+  resubmitTimeEntry(id: string, updateData?: any): Promise<TimeEntry | undefined>;
+  reopenTimeEntry(id: string): Promise<TimeEntry | undefined>;
+  onHoldTimeEntry(id: string, reason: string, managerId: string): Promise<TimeEntry | undefined>;
+  createDiscussion(discussion: InsertDiscussion): Promise<Discussion>;
+  getDiscussionsByEntry(entryId: string): Promise<Discussion[]>;
+  getDiscussionsByEmployee(employeeId: string): Promise<Discussion[]>;
+  getAllDiscussions(): Promise<Discussion[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -576,6 +586,67 @@ export class DatabaseStorage implements IStorage {
       ORDER BY tp.postponed_at DESC
     `);
     return result.rows;
+  }
+
+  async resubmitTimeEntry(id: string, updateData: any = {}): Promise<TimeEntry | undefined> {
+    const data: any = {
+      ...updateData,
+      status: "resubmitted",
+      rejectionReason: null,
+      submittedAt: new Date(),
+    };
+
+    const [updated] = await db.update(timeEntries)
+      .set(data)
+      .where(eq(timeEntries.id, id))
+      .returning();
+    return updated;
+  }
+
+  async reopenTimeEntry(id: string): Promise<TimeEntry | undefined> {
+    const [updated] = await db.update(timeEntries)
+      .set({
+        status: "pending",
+        rejectionReason: null,
+      })
+      .where(eq(timeEntries.id, id))
+      .returning();
+    return updated;
+  }
+
+  async onHoldTimeEntry(id: string, reason: string, managerId: string): Promise<TimeEntry | undefined> {
+    const [updated] = await db.update(timeEntries)
+      .set({
+        status: "on_hold",
+        onHoldReason: reason,
+        approvedBy: managerId,
+        approvedAt: new Date(),
+      })
+      .where(eq(timeEntries.id, id))
+      .returning();
+    return updated;
+  }
+
+  async createDiscussion(discussion: InsertDiscussion): Promise<Discussion> {
+    const [newDiscussion] = await db.insert(discussions).values(discussion).returning();
+    return newDiscussion;
+  }
+
+  async getDiscussionsByEntry(entryId: string): Promise<Discussion[]> {
+    return await db.select().from(discussions)
+      .where(eq(discussions.timeEntryId, entryId))
+      .orderBy(desc(discussions.createdAt));
+  }
+
+  async getDiscussionsByEmployee(employeeId: string): Promise<Discussion[]> {
+    return await db.select().from(discussions)
+      .where(eq(discussions.employeeId, employeeId))
+      .orderBy(desc(discussions.createdAt));
+  }
+
+  async getAllDiscussions(): Promise<Discussion[]> {
+    return await db.select().from(discussions)
+      .orderBy(desc(discussions.createdAt));
   }
 }
 

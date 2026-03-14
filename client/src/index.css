@@ -286,3 +286,36 @@
     inset: -1px;
   }
 }
+
+/* Glassmorphism Utilities */
+.glass-card {
+  @apply bg-slate-900/40 backdrop-blur-md border border-white/10 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)];
+}
+
+.glass-morphism {
+  @apply backdrop-blur-xl bg-white/5 border border-white/10;
+}
+
+.glass-pill {
+  @apply bg-white/10 backdrop-blur-sm border border-white/20 hover:bg-white/20 transition-all duration-300;
+}
+
+/* Premium Gradient Utilities */
+.bg-premium-gradient {
+  @apply bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900;
+}
+
+.text-gradient {
+  @apply bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-cyan-400;
+}
+
+.border-gradient {
+  border: 1px solid;
+  border-image-source: linear-gradient(to right, rgba(59, 130, 246, 0.5), rgba(6, 182, 212, 0.5));
+  border-image-slice: 1;
+}
+
+/* Micro-animations */
+.hover-glow {
+  @apply transition-all duration-300 hover:shadow-[0_0_20px_rgba(59,130,246,0.2)] hover:border-blue-500/50;
+}

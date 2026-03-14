@@ -12,6 +12,7 @@ import ForgotPasswordModal from '@/components/ForgotPasswordModal';
 import AppHeader from '@/components/AppHeader';
 import AppSidebar from '@/components/AppSidebar';
 import TrackerPage from '@/pages/TrackerPage';
+import AchievementsPage from '@/pages/AchievementsPage';
 import ApprovalPage from '@/pages/ApprovalPage';
 import ReportsPage from '@/pages/ReportsPage';
 import OrganisationPage from '@/pages/OrganisationPage';
@@ -19,7 +20,10 @@ import UsersPage from '@/pages/UsersPage';
 import AdminPage from '@/pages/AdminPage';
 import AnalyticsPage from '@/pages/AnalyticsPage';
 import TaskEntryPage from '@/pages/TaskEntryPage';
+import RejectionsPage from '@/pages/RejectionsPage';
+import MascotDolls from '@/components/MascotDolls';
 import PostponementsPage from '@/pages/admin/PostponementsPage';
+import DiscussionPage from '@/pages/DiscussionPage';
 import NotFound from '@/pages/not-found';
 import type { TimeEntry } from '@shared/schema';
 
@@ -28,18 +32,30 @@ function AuthenticatedApp() {
   const [location, setLocation] = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
+  console.log('[AuthenticatedApp] Rendering for user:', user?.id, 'role:', user?.role);
+
   const sidebarStyle = {
     "--sidebar-width": "14rem",
     "--sidebar-width-icon": "3.5rem",
   };
 
   // Fetch pending approvals count
-  const { data: timeEntries = [] } = useQuery<TimeEntry[]>({
+  const { data: allTimeEntries = [] } = useQuery<TimeEntry[]>({
     queryKey: ['/api/time-entries'],
     enabled: user?.role === 'manager' || user?.role === 'hr' || user?.role === 'admin',
   });
 
-  const pendingCount = timeEntries.filter(e => e.status === 'pending').length;
+  const { data: employeeTimeEntries = [] } = useQuery<TimeEntry[]>({
+    queryKey: ['/api/time-entries/employee', user?.id],
+    enabled: user?.role === 'employee',
+  });
+
+  const relevantEntries = user?.role === 'employee' ? employeeTimeEntries : allTimeEntries;
+
+  const entriesArray = Array.isArray(relevantEntries) ? relevantEntries : [];
+  const pendingCount = entriesArray.filter(e => e && e.status === 'pending').length;
+  const rejectionsCount = entriesArray.filter(e => e && e.status === 'rejected').length;
+  const onHoldCount = entriesArray.filter(e => e && e.status === 'on_hold').length;
 
   if (!user) return null;
 
@@ -54,6 +70,8 @@ function AuthenticatedApp() {
         <AppSidebar
           userRole={user.role}
           pendingApprovals={pendingCount}
+          pendingRejections={rejectionsCount}
+          pendingOnHold={onHoldCount}
           collapsed={!sidebarOpen}
           onToggle={() => setSidebarOpen(!sidebarOpen)}
         />
@@ -74,6 +92,9 @@ function AuthenticatedApp() {
               <Route path="/tracker">
                 <TrackerPage user={user} />
               </Route>
+              <Route path="/achievements">
+                <AchievementsPage />
+              </Route>
               <Route path="/analytics">
                 <AnalyticsPage user={user} />
               </Route>
@@ -90,6 +111,12 @@ function AuthenticatedApp() {
               )}
               <Route path="/reports">
                 <ReportsPage user={user} />
+              </Route>
+              <Route path="/rejections">
+                <RejectionsPage user={user} />
+              </Route>
+              <Route path="/discussion">
+                <DiscussionPage />
               </Route>
               {user.role === 'admin' && (
                 <>
@@ -154,6 +181,7 @@ function App() {
       <TooltipProvider>
         <AuthProvider>
           <AppContent />
+          <MascotDolls />
           <Toaster />
         </AuthProvider>
       </TooltipProvider>

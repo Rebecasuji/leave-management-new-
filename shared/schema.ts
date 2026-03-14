@@ -200,9 +200,31 @@ export const timeEntries = pgTable("time_entries", {
   managerApprovedBy: varchar("manager_approved_by"),
   managerApprovedAt: timestamp("manager_approved_at"),
   rejectionReason: text("rejection_reason"),
+  onHoldReason: text("on_hold_reason"),
   approvalComment: text("approval_comment"),
   submittedAt: timestamp("submitted_at").defaultNow().notNull(),
 });
+
+/* -------------------------------------------------------------------------- */
+/*                                Discussions                                 */
+/* -------------------------------------------------------------------------- */
+export const discussions = pgTable("discussions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  timeEntryId: varchar("time_entry_id").notNull(),
+  employeeId: varchar("employee_id").notNull(),
+  senderId: varchar("sender_id").notNull(),
+  senderName: text("sender_name").notNull(),
+  message: text("message").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertDiscussionSchema = createInsertSchema(discussions).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertDiscussion = z.infer<typeof insertDiscussionSchema>;
+export type Discussion = typeof discussions.$inferSelect;
 
 export const insertTimeEntrySchema = createInsertSchema(timeEntries).omit({
   id: true,
@@ -218,6 +240,7 @@ export type ExtendedTimeEntry = TimeEntry & {
   managerApprovedBy?: string | null;
   managerApprovedAt?: Date | null;
   rejectionReason?: string | null;
+  onHoldReason?: string | null;
   approvalComment?: string | null;
 };
 

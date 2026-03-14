@@ -1,11 +1,13 @@
-import { Pool, QueryResult } from "pg";
+import pkg from 'pg';
+const { Pool } = pkg;
+import type { QueryResult } from 'pg';
 
 // Initialize Neon PostgreSQL connection pool for PMS database
 const pmsDatabaseUrl = process.env.PMS_DATABASE_URL || process.env.DATABASE_URL!;
 
 export const pmsPool = new Pool({
   connectionString: pmsDatabaseUrl,
-  ssl: {
+  ssl: process.env.PMS_DISABLE_SSL === 'true' ? false : {
     rejectUnauthorized: false
   }
 });
@@ -44,6 +46,7 @@ export interface PMSTask {
   created_at?: string;
   assigner_id?: string;
   updated_at?: string;
+  progress?: number;
 }
 
 // PMS Subtask interface matching Supabase schema
@@ -53,6 +56,7 @@ export interface PMSSubtask {
   title: string;
   assigned_to?: string;
   is_completed?: boolean;
+  progress?: number;
   created_at?: string;
 }
 
@@ -206,7 +210,7 @@ export const getProjects = async (userRole?: string, userEmpCode?: string, userD
   }
 };
 
-export const getTasks = async (projectId?: string, userDepartment?: string): Promise<PMSTask[]> => {
+export const getTasks = async (projectId?: string, userDepartment?: string, userEmpCode?: string): Promise<PMSTask[]> => {
   try {
     console.log("📡 Executing PMS getTasks query for project:", projectId);
 
@@ -215,13 +219,28 @@ export const getTasks = async (projectId?: string, userDepartment?: string): Pro
 
     if (projectId) {
       // projectId is actually the project_code, need to join with projects table
+      // and filter by user assignment if userEmpCode is provided
       query = `
-        SELECT pt.* FROM project_tasks pt
+        SELECT DISTINCT pt.* FROM project_tasks pt
         INNER JOIN projects p ON pt.project_id = p.id
+        LEFT JOIN task_members tm ON pt.id = tm.task_id
+        LEFT JOIN employees e ON tm.employee_id = e.id
         WHERE p.project_code = $1
+          AND (pt.status IS NULL OR LOWER(pt.status) != 'completed')
+          AND (LOWER(TRIM(e.emp_code)) = LOWER(TRIM($2)) OR $2 IS NULL)
         ORDER BY pt.task_name
       `;
-      params.push(projectId);
+      params.push(projectId, userEmpCode || null);
+    } else if (userEmpCode) {
+      query = `
+        SELECT DISTINCT pt.* FROM project_tasks pt
+        INNER JOIN task_members tm ON pt.id = tm.task_id
+        INNER JOIN employees e ON tm.employee_id = e.id
+        WHERE LOWER(TRIM(e.emp_code)) = LOWER(TRIM($1))
+          AND (pt.status IS NULL OR LOWER(pt.status) != 'completed')
+        ORDER BY pt.task_name
+      `;
+      params.push(userEmpCode);
     }
 
     const result: QueryResult = await pmsPool.query(query, params);
@@ -241,19 +260,23 @@ export const getTasks = async (projectId?: string, userDepartment?: string): Pro
   }
 };
 
-export const getTasksByProject = async (projectId: string, userDepartment?: string): Promise<PMSTask[]> => {
+export const getTasksByProject = async (projectId: string, userDepartment?: string, userEmpCode?: string): Promise<PMSTask[]> => {
   try {
-    console.log("🔍 PMS getTasksByProject called with projectId:", projectId);
+    console.log("🔍 PMS getTasksByProject called with projectId:", projectId, "userEmpCode:", userEmpCode);
 
     console.log("📡 Executing PMS getTasksByProject query...");
 
     // projectId is the project_code, need to join with projects table
     const result: QueryResult = await pmsPool.query(
-      `SELECT pt.* FROM project_tasks pt
+      `SELECT DISTINCT pt.* FROM project_tasks pt
        INNER JOIN projects p ON pt.project_id = p.id
+       LEFT JOIN task_members tm ON pt.id = tm.task_id
+       LEFT JOIN employees e ON tm.employee_id = e.id
        WHERE p.project_code = $1
+         AND (pt.status IS NULL OR LOWER(pt.status) != 'completed')
+         AND (LOWER(TRIM(e.emp_code)) = LOWER(TRIM($2)) OR $2 IS NULL)
        ORDER BY pt.task_name`,
-      [projectId]
+      [projectId, userEmpCode || null]
     );
 
     let tasks = result.rows as PMSTask[] || [];
@@ -271,9 +294,9 @@ export const getTasksByProject = async (projectId: string, userDepartment?: stri
   }
 };
 
-export const getSubtasks = async (taskId?: string, userDepartment?: string): Promise<PMSSubtask[]> => {
+export const getSubtasks = async (taskId?: string, userDepartment?: string, userEmpCode?: string): Promise<PMSSubtask[]> => {
   try {
-    console.log("🔍 PMS getSubtasks called with taskId:", taskId, "userDepartment:", userDepartment);
+    console.log("🔍 PMS getSubtasks called with taskId:", taskId, "userDepartment:", userDepartment, "userEmpCode:", userEmpCode);
 
     console.log("📡 Executing PMS getSubtasks query (fetching all subtasks)...");
 
@@ -283,9 +306,11 @@ export const getSubtasks = async (taskId?: string, userDepartment?: string): Pro
 
     let subtasks = result.rows as PMSSubtask[] || [];
     console.log(`📊 PMS subtasks returned: ${subtasks.length} subtasks`);
+
     if (subtasks.length > 0) {
       console.log("📋 First subtask sample:", JSON.stringify(subtasks[0], null, 2));
-      // Filter by taskId using various possible column names
+
+      // Filter by taskId and non-completed status
       if (taskId) {
         console.log(`🔍 Filtering subtasks for taskId: ${taskId}`);
         subtasks = subtasks.filter(subtask => {
@@ -293,13 +318,24 @@ export const getSubtasks = async (taskId?: string, userDepartment?: string): Pro
             (subtask as any).parent_task_id || (subtask as any).parent_task ||
             (subtask as any).task_ref || (subtask as any).taskId).toLowerCase();
           const targetId = String(taskId).toLowerCase();
-          const matches = sTaskId === targetId;
-          if (matches) {
-            console.log(`✅ Found matching subtask:`, subtask.title);
-          }
-          return matches;
+
+          // Match taskId AND ensure subtask is not fully completed
+          const isTaskMatch = sTaskId === targetId;
+          const isNotCompleted = !subtask.is_completed && (subtask.progress === undefined || subtask.progress < 100);
+
+          // Match assignment if userEmpCode is provided
+          const isAssigned = !userEmpCode || (subtask.assigned_to && String(subtask.assigned_to).toLowerCase() === String(userEmpCode).toLowerCase());
+
+          return isTaskMatch && isNotCompleted && isAssigned;
         });
-        console.log(`📊 Filtered to ${subtasks.length} subtasks for task ${taskId}`);
+        console.log(`📊 Filtered to ${subtasks.length} active/assigned subtasks for task ${taskId}`);
+      } else {
+        // If no taskId, still filter by assignment and completion
+        subtasks = subtasks.filter(s => {
+          const isNotCompleted = !s.is_completed && (s.progress === undefined || s.progress < 100);
+          const isAssigned = !userEmpCode || (s.assigned_to && String(s.assigned_to).toLowerCase() === String(userEmpCode).toLowerCase());
+          return isNotCompleted && isAssigned;
+        });
       }
     } else {
       console.log("⚠️ No subtasks found in PMS database");
@@ -348,8 +384,8 @@ export const updateProjectProgress = async (projectId: string, progress: number)
     console.log(`📡 Updating PMS project ${projectId} progress to ${progress}%`);
     // Supports both UUID and project_code
     const result = await pmsPool.query(
-      'UPDATE projects SET progress = $1, updated_at = NOW() WHERE id::text = $2 OR project_code = $2',
-      [progress, projectId]
+      'UPDATE projects SET progress = $1, status = $2, updated_at = NOW() WHERE id::text = $3 OR project_code = $3',
+      [progress, progress === 100 ? 'Completed' : 'In Progress', projectId]
     );
     const success = (result.rowCount ?? 0) > 0;
     if (success) {
@@ -383,34 +419,126 @@ export const updateSubtaskInPMS = async (subtaskId: string, isCompleted: boolean
   }
 };
 
-// Check if all subtasks for a task are completed and mark parent task as Completed
-export const checkAndMarkTaskCompleted = async (taskId: string): Promise<boolean> => {
+// Update a PMS subtask progress and trigger parent update
+export const updateSubtaskProgress = async (subtaskId: string, progress: number): Promise<boolean> => {
   try {
-    console.log(`🔍 Checking subtasks completion for task ${taskId}`);
-
-    // Fetch all subtasks for this task
-    // We use getSubtasks helper which already handle multiple column name variations (task_id, taskid, etc)
-    const subtasks = await getSubtasks(taskId);
-
-    if (subtasks.length === 0) {
-      console.log(`ℹ️ Task ${taskId} has no subtasks, marking as Completed directly`);
-      await updateTaskInPMS(taskId, { status: 'Completed' });
+    console.log(`📡 Updating PMS subtask ${subtaskId} progress to ${progress}%`);
+    const result: QueryResult = await pmsPool.query(
+      'UPDATE subtasks SET progress = $1, is_completed = $2, updated_at = NOW() WHERE id = $3::uuid RETURNING task_id',
+      [progress, progress === 100, subtaskId]
+    );
+    if (result.rows && result.rows.length > 0) {
+      const taskId = result.rows[0].task_id;
+      await updateTaskProgress(taskId);
       return true;
     }
-
-    // Standardize comparison to ensure we catch booleans correctly
-    const allCompleted = subtasks.every(st => String(st.is_completed).toLowerCase() === 'true');
-    console.log(`📊 Task ${taskId}: ${subtasks.filter(st => String(st.is_completed).toLowerCase() === 'true').length}/${subtasks.length} subtasks completed.`);
-
-    if (allCompleted) {
-      console.log(`✅ All subtasks for task ${taskId} are completed. Marking task as Completed.`);
-      await updateTaskInPMS(taskId, { status: 'Completed' });
-      return true;
-    }
-
     return false;
   } catch (error) {
-    console.error('💥 Error checking task completion in PMS:', error);
+    console.error('💥 Error updating subtask progress in PMS:', error);
+    return false;
+  }
+};
+
+// Recalculate task progress based on subtasks
+export const updateTaskProgress = async (taskId: string, directProgress?: number): Promise<boolean> => {
+  try {
+    console.log(`🔍 Recalculating progress for task ${taskId}`);
+    const subtasks = await getSubtasks(taskId);
+
+    let progress = 0;
+    if (subtasks.length > 0) {
+      const sum = subtasks.reduce((acc, st) => acc + (Number(st.progress) || 0), 0);
+      progress = Math.round(sum / subtasks.length);
+    } else if (directProgress !== undefined) {
+      progress = directProgress;
+    } else {
+      // If no subtasks and no direct progress provided, we keep current or default to 0
+      // Usually called with directProgress when subtasks don't exist
+      return false;
+    }
+
+    const result: QueryResult = await pmsPool.query(
+      'UPDATE project_tasks SET progress = $1, status = $2, updated_at = NOW() WHERE id = $3::uuid RETURNING key_step_id',
+      [progress, progress === 100 ? 'Completed' : 'In Progress', taskId]
+    );
+
+    if (result.rows && result.rows.length > 0) {
+      const keyStepId = result.rows[0].key_step_id;
+      if (keyStepId) {
+        await updateKeyStepProgress(keyStepId);
+      } else {
+        // Fallback to project update if no key step
+        const taskRes = await pmsPool.query('SELECT project_id FROM project_tasks WHERE id = $1::uuid', [taskId]);
+        if (taskRes.rows.length > 0) {
+          await updateProjectProgressFromChildren(taskRes.rows[0].project_id);
+        }
+      }
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.error('💥 Error updating task progress in PMS:', error);
+    return false;
+  }
+};
+
+// Recalculate key step progress based on tasks
+export const updateKeyStepProgress = async (keyStepId: string): Promise<boolean> => {
+  try {
+    console.log(`🔍 Recalculating progress for key step ${keyStepId}`);
+    const tasksRes = await pmsPool.query('SELECT progress FROM project_tasks WHERE key_step_id = $1::uuid', [keyStepId]);
+    const tasks = tasksRes.rows;
+
+    let progress = 0;
+    if (tasks.length > 0) {
+      const sum = tasks.reduce((acc, t) => acc + (Number(t.progress) || 0), 0);
+      progress = Math.round(sum / tasks.length);
+    }
+
+    const result: QueryResult = await pmsPool.query(
+      'UPDATE key_steps SET progress = $1, status = $2, updated_at = NOW() WHERE id = $3::uuid RETURNING project_id',
+      [progress, progress === 100 ? 'Completed' : 'In Progress', keyStepId]
+    );
+
+    if (result.rows && result.rows.length > 0) {
+      await updateProjectProgressFromChildren(result.rows[0].project_id);
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.error('💥 Error updating key step progress in PMS:', error);
+    return false;
+  }
+};
+
+// Recalculate project progress based on key steps
+export const updateProjectProgressFromChildren = async (projectId: string): Promise<boolean> => {
+  try {
+    console.log(`🔍 Recalculating progress for project ${projectId}`);
+    const keyStepsRes = await pmsPool.query('SELECT progress FROM key_steps WHERE project_id = $1::uuid', [projectId]);
+    const keySteps = keyStepsRes.rows;
+
+    let progress = 0;
+    if (keySteps.length > 0) {
+      const sum = keySteps.reduce((acc, ks) => acc + (Number(ks.progress) || 0), 0);
+      progress = Math.round(sum / keySteps.length);
+    } else {
+      // Fallback: if no key steps, try to average tasks directly
+      const tasksRes = await pmsPool.query('SELECT progress FROM project_tasks WHERE project_id = $1::uuid', [projectId]);
+      const tasks = tasksRes.rows;
+      if (tasks.length > 0) {
+        const sum = tasks.reduce((acc, t) => acc + (Number(t.progress) || 0), 0);
+        progress = Math.round(sum / tasks.length);
+      }
+    }
+
+    const result = await pmsPool.query(
+      'UPDATE projects SET progress = $1, status = $2, updated_at = NOW() WHERE id::text = $3 OR project_code = $3',
+      [progress, progress === 100 ? 'Completed' : 'In Progress', projectId]
+    );
+    return (result.rowCount ?? 0) > 0;
+  } catch (error) {
+    console.error('💥 Error updating project progress from children in PMS:', error);
     return false;
   }
 };

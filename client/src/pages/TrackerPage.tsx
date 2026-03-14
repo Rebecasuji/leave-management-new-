@@ -6,10 +6,11 @@ import { Card } from '@/components/ui/card';
 import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
-import { Plus, Calendar as CalendarIcon, ChevronDown, ChevronUp, Loader2, Send, Download, FileSpreadsheet, CheckCircle, Mail, Clock, Zap, AlertCircle, Settings } from 'lucide-react';
+import { Plus, Calendar as CalendarIcon, ChevronDown, ChevronUp, Loader2, Send, Download, FileSpreadsheet, CheckCircle, Mail, Clock, Zap, AlertCircle, Settings, Target } from 'lucide-react';
 import TaskTable, { Task } from '@/components/TaskTable';
 import ShiftSelector from '@/components/ShiftSelector';
 import AnalyticsPanel from '@/components/AnalyticsPanel';
+import GreetingAssistant from '@/components/GreetingAssistant';
 import { User } from '@/context/AuthContext';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -17,7 +18,11 @@ import { useToast } from '@/hooks/use-toast';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import { format } from 'date-fns';
 import * as XLSX from 'xlsx';
+import { confettiBurst, playSound } from '@/lib/feedback';
+import gamification from '@/lib/gamification';
+import PointsDisplay from '@/components/PointsDisplay';
 import type { TimeEntry } from '@shared/schema';
+// ProjectTreesPanel removed from Tracker page (kept component for Achievements page use)
 
 interface TrackerPageProps {
   user: User;
@@ -148,6 +153,20 @@ export default function TrackerPage({ user }: TrackerPageProps) {
     queryKey: ['/api/time-entries/employee', user.id],
   });
 
+  // Fetch LMS hours for the selected date
+  const { data: lmsHoursData } = useQuery<{ leaveHours: number; permissionHours: number; totalLMSHours: number }>({
+    queryKey: ['/api/lms/hours', user.employeeCode, formattedDate],
+    queryFn: async () => {
+      const response = await fetch(`/api/lms/hours?employeeCode=${user.employeeCode}&date=${formattedDate}`);
+      if (!response.ok) return { leaveHours: 0, permissionHours: 0, totalLMSHours: 0 };
+      return response.json();
+    },
+    enabled: !!user?.employeeCode && !!formattedDate,
+  });
+
+  const lmsHours = lmsHoursData?.totalLMSHours || 0;
+  const lmsMinutes = Math.round(lmsHours * 60);
+
   // Fetch available PMS tasks for the employee
   const { data: availableTasks = [], isLoading: isLoadingPMSTasks, error: pmsError } = useQuery<any[]>({
     queryKey: ['/api/available-tasks', user.id],
@@ -170,22 +189,25 @@ export default function TrackerPage({ user }: TrackerPageProps) {
     enabled: !!user?.id,
   });
 
-  // Filter entries for selected date
-  const todaysEntries = serverEntries.filter(e => e.date === formattedDate);
+  // Fetch all projects for the department to populate filters
+  const { data: pmsProjects = [] } = useQuery<any[]>({
+    queryKey: ['/api/projects', user.id],
+    queryFn: async () => {
+      try {
+        const response = await fetch(`/api/projects?userRole=${user.role}&userEmpCode=${user.employeeCode}&userDepartment=${user.department}`);
+        if (!response.ok) throw new Error('Failed to fetch projects');
+        return response.json();
+      } catch (error) {
+        console.error('Error fetching projects:', error);
+        return [];
+      }
+    },
+    enabled: !!user?.id,
+  });
 
-  // Format task description with task and subtask
-  const formatTaskDescription = (task: Task) => {
-    let desc = task.title;
-    if (task.subTask) {
-      desc += ' | ' + task.subTask;
-    } else {
-      desc += ' | ';
-    }
-    if (task.description) {
-      desc += ' | ' + task.description;
-    }
-    return desc;
-  };
+  // Filter entries for selected date, but ALWAYS include rejected entries from any date
+  const todaysEntries = serverEntries.filter(e => e.date === formattedDate || e.status === 'rejected');
+
 
   // Create time entry mutation
   const submitMutation = useMutation({
@@ -271,12 +293,6 @@ export default function TrackerPage({ user }: TrackerPageProps) {
     },
   });
 
-  const formatDuration = (minutes: number): string => {
-    const hours = Math.floor(minutes / 60);
-    const mins = minutes % 60;
-    return `${hours}h ${mins}m`;
-  };
-
   const parseDuration = (duration: string): number => {
     const match = duration.match(/(\d+)h\s*(\d+)m?/);
     if (match) {
@@ -319,6 +335,8 @@ export default function TrackerPage({ user }: TrackerPageProps) {
         pmsSubtaskId: entry.pmsSubtaskId || undefined,
         isComplete: entry.status === 'approved',
         serverStatus: entry.status as Task['serverStatus'],
+        date: entry.date,
+        rejectionReason: entry.rejectionReason || undefined,
       };
     }),
     // Add pending local tasks
@@ -347,10 +365,11 @@ export default function TrackerPage({ user }: TrackerPageProps) {
   // Extract unique projects and tasks for dropdowns
   const uniqueProjects = useMemo(() => {
     const projects = new Set<string>();
+    pmsProjects.forEach(p => projects.add(p.project_name || p.title));
     availableTasks.forEach(t => projects.add(t.projectName));
     allTasks.forEach(t => projects.add(t.project));
     return Array.from(projects).sort();
-  }, [availableTasks, allTasks]);
+  }, [pmsProjects, availableTasks, allTasks]);
 
   const uniqueTasks = useMemo(() => {
     const tasks = new Set<string>();
@@ -411,15 +430,24 @@ export default function TrackerPage({ user }: TrackerPageProps) {
           if (formattedCompare > endDateFilter) matchesDateRange = false;
         }
       }
-
       return matchesProject && matchesTask && matchesDateRange;
     });
   }, [availableTasks, projectFilter, taskFilter, startDateFilter, endDateFilter]);
 
-  const totalWorkedMinutes = allTasks.reduce((acc, task) => acc + task.durationMinutes, 0);
+  const todaysTasksOnly = useMemo(() =>
+    allTasks.filter(t => t.serverStatus === 'draft' || t.date === formattedDate),
+    [allTasks, formattedDate]
+  );
+
+  const totalWorkedMinutes = todaysTasksOnly.reduce((acc, task) => acc + task.durationMinutes, 0);
+  const totalCombinedMinutes = totalWorkedMinutes + lmsMinutes;
+  
+  // Debug log for LMS
+  console.log(`[LMS Debug] Code: ${user?.employeeCode}, Date: ${formattedDate}, Hours: ${lmsHours}, Minutes: ${lmsMinutes}, Total: ${totalCombinedMinutes}`);
+
   const canSubmit =
     pendingTasks.length > 0 &&
-    totalWorkedMinutes >= shiftHours * 60 &&
+    totalCombinedMinutes >= shiftHours * 60 &&
     pendingDeadlineTasks.length === 0;
 
 
@@ -430,6 +458,25 @@ export default function TrackerPage({ user }: TrackerPageProps) {
 
   const handleEditTask = (task: Task) => {
     setLocation(`/task-entry/${task.id}?date=${formattedDate}`);
+  };
+
+  const handleResubmitTask = async (task: Task) => {
+    try {
+      await apiRequest('PATCH', `/api/time-entries/${task.id}/resubmit`, {
+        date: formattedDate
+      });
+      queryClient.invalidateQueries({ queryKey: ['/api/time-entries/employee', user.id] });
+      toast({
+        title: "Task Resubmitted",
+        description: `Task resubmitted with today's date (${formattedDate}).`,
+      });
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to resubmit task.",
+        variant: "destructive",
+      });
+    }
   };
 
   const handleDeleteTask = async (taskId: string) => {
@@ -466,6 +513,8 @@ export default function TrackerPage({ user }: TrackerPageProps) {
     updatePendingTasks(pendingTasks.map(t =>
       t.id === taskId ? { ...t, isComplete: true, percentageComplete: 100 } : t
     ));
+    // Trigger celebratory doll
+    window.dispatchEvent(new CustomEvent('mascot:doll', { detail: { text: "Task Complete! Hurray!", x: 50, y: 30 } }));
   };
 
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -617,6 +666,16 @@ export default function TrackerPage({ user }: TrackerPageProps) {
       // Save submitted tasks for display and show confirmation
       setSubmittedTasks(tasksToSubmit);
       setShowSubmissionConfirm(true);
+      try {
+        confettiBurst();
+        playSound('submit');
+        // Trigger celebratory dolls
+        window.dispatchEvent(new CustomEvent('mascot:doll', { detail: { text: "Timesheet Submitted!", x: 40, y: 30 } }));
+        setTimeout(() => window.dispatchEvent(new CustomEvent('mascot:doll', { detail: { text: "Great Job!", x: 60, y: 40 } })), 400);
+      } catch { }
+
+      // Note: Points are now awarded per-project when tasks are completed (100%).
+      // We intentionally do not award points here for timesheet submission to avoid duplicate awards.
 
       toast({
         title: "Timesheet Submitted",
@@ -664,6 +723,12 @@ export default function TrackerPage({ user }: TrackerPageProps) {
             reason: f.reason,
             postponedBy: user.id,
           });
+          try {
+            // apply a small penalty for postponing the task so project tree reflects postponements
+            const projectId = t.projectCode || t.projectName || String(t.id);
+            // default penalty: 10 points
+            (gamification as any).subtractPointsForProject(projectId, 10, 'postpone-penalty');
+          } catch (e) { }
         } else {
           // Acknowledge logic
           await apiRequest('POST', `/api/tasks/${t.id}/acknowledge`, {
@@ -756,7 +821,7 @@ export default function TrackerPage({ user }: TrackerPageProps) {
 
   // Calculate live tools usage from actual tasks
   const toolsUsageMap = new Map<string, number>();
-  allTasks.forEach(task => {
+  todaysTasksOnly.forEach(task => {
     if (task.toolsUsed && task.toolsUsed.length > 0) {
       const minutesPerTool = task.durationMinutes / task.toolsUsed.length;
       task.toolsUsed.forEach(tool => {
@@ -770,7 +835,7 @@ export default function TrackerPage({ user }: TrackerPageProps) {
 
   // Calculate live hourly productivity from actual task times
   const hourlyMap = new Map<string, number>();
-  allTasks.forEach(task => {
+  todaysTasksOnly.forEach(task => {
     if (task.startTime && task.endTime) {
       const startHour = parseInt(task.startTime.split(':')[0]);
       const endHour = parseInt(task.endTime.split(':')[0]);
@@ -801,13 +866,14 @@ export default function TrackerPage({ user }: TrackerPageProps) {
     idleMinutes: 0,
     neutralMinutes: 0,
     nonProductiveMinutes: 0,
-    taskHours: allTasks.map(t => ({ task: t.title.slice(0, 20), hours: t.durationMinutes / 60 })),
+    taskHours: todaysTasksOnly.map(t => ({ task: t.title.slice(0, 20), hours: t.durationMinutes / 60 })),
     toolsUsage: liveToolsUsage,
     hourlyProductivity: liveHourlyProductivity.length > 0 ? liveHourlyProductivity : [],
   };
 
   return (
     <div className="p-4 md:p-6 space-y-6" data-testid="tracker-page">
+      <GreetingAssistant userName={user.name} />
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-white" style={{ fontFamily: 'Space Grotesk' }}>
@@ -819,6 +885,9 @@ export default function TrackerPage({ user }: TrackerPageProps) {
         </div>
 
         <div className="flex gap-2 items-center">
+          <div className="flex items-center gap-3">
+            <PointsDisplay />
+          </div>
           <Popover>
             <PopoverTrigger asChild>
               <Button
@@ -859,10 +928,54 @@ export default function TrackerPage({ user }: TrackerPageProps) {
       <ShiftSelector
         shiftHours={shiftHours}
         onShiftChange={setShiftHours}
-        totalWorkedMinutes={totalWorkedMinutes}
+        totalWorkedMinutes={totalCombinedMinutes} // Pass the COMBINED minutes here
         onFinalSubmit={handleFinalSubmit}
         canSubmit={canSubmit}
       />
+
+      {/* LMS Hours Display - Debug visibility */}
+      <div className="hidden" data-lms-debug={`hours:${lmsHours},code:${user?.employeeCode},date:${formattedDate}`} />
+
+      {/* LMS Hours Display */}
+      {lmsHours > 0 ? (
+        <Card className="bg-blue-500/10 border-blue-500/20 p-4 animate-in fade-in slide-in-from-top-2 duration-500">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center shrink-0">
+                <Target className="w-5 h-5 text-blue-400" />
+              </div>
+              <div>
+                <h3 className="text-blue-400 font-bold text-sm uppercase tracking-wider flex items-center gap-2">
+                  LMS Approved Hours
+                </h3>
+                <div className="flex gap-3 mt-1">
+                  {lmsHoursData?.leaveHours ? (
+                    <span className="text-xs text-blue-200/70">
+                      Leaves: <strong className="text-white">{lmsHoursData.leaveHours}h</strong>
+                    </span>
+                  ) : null}
+                  {lmsHoursData?.permissionHours ? (
+                    <span className="text-xs text-blue-200/70">
+                      Permissions: <strong className="text-white">{lmsHoursData.permissionHours}h</strong>
+                    </span>
+                  ) : null}
+                  <span className="text-xs text-blue-200/70">
+                    Total: <strong className="text-blue-400 font-bold">{lmsHours}h</strong>
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div className="text-right">
+              <p className="text-[10px] text-blue-400 font-bold uppercase tracking-widest">Added to Total</p>
+              <p className="text-2xl font-bold text-white">+{lmsHours}h</p>
+            </div>
+          </div>
+        </Card>
+      ) : lmsHoursData ? (
+        <p className="hidden">LMS Data received but 0 hours: {JSON.stringify(lmsHoursData)}</p>
+      ) : null}
+
+      {/* Project achievement trees removed from Tracker page; view them on Achievements page */}
 
       {/* Pending Tasks Info */}
       {(pendingTasks.length > 0 || pendingDeadlineTasks.length > 0) && (
@@ -915,6 +1028,37 @@ export default function TrackerPage({ user }: TrackerPageProps) {
         </Card>
       )}
 
+      {/* Warning for Rejected entries that need action (Check all history, not just today) */}
+      {serverEntries.some(e => e.status === 'rejected') && (
+        <Card className="bg-rose-500/10 border-rose-500/20 p-4 animate-in fade-in slide-in-from-top-2 duration-500">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-rose-500/20 flex items-center justify-center shrink-0">
+                <AlertCircle className="w-5 h-5 text-rose-500 animate-pulse" />
+              </div>
+              <div>
+                <h3 className="text-rose-400 font-bold text-sm uppercase tracking-wider flex items-center gap-2">
+                  <Zap className="w-3 h-3" /> Needs Rectification ({serverEntries.filter(e => e.status === 'rejected').length})
+                </h3>
+                <p className="text-rose-200/60 text-xs mt-1">
+                  You have rejected tasks that need to be fixed and re-submitted.
+                </p>
+              </div>
+            </div>
+            <Button
+              size="sm"
+              onClick={() => {
+                const firstRejected = serverEntries.find(e => e.status === 'rejected');
+                if (firstRejected) setLocation(`/task-entry/${firstRejected.id}`);
+              }}
+              className="bg-rose-600 hover:bg-rose-500 text-white font-bold uppercase text-[10px] tracking-widest px-4 h-8 shadow-lg shadow-rose-900/20"
+            >
+              Fix Rejected Entries
+            </Button>
+          </div>
+        </Card>
+      )}
+
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <h2 className="text-lg font-semibold text-white">Today's Tasks</h2>
         <Button
@@ -928,18 +1072,18 @@ export default function TrackerPage({ user }: TrackerPageProps) {
       </div>
 
       {/* Filters Section */}
-      <Card className="bg-slate-800/50 border-blue-500/20 p-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="glass-card rounded-2xl p-6 border-none animate-in fade-in slide-in-from-top-2 duration-700">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           <div className="space-y-2">
-            <label className="text-sm font-medium text-blue-200/70 flex items-center gap-2">
-              <Settings className="w-4 h-4" />
-              Select Project
+            <label className="text-[10px] font-bold uppercase tracking-wider text-blue-200/40 flex items-center gap-2">
+              <Settings className="w-3 h-3" />
+              Project
             </label>
             <Select value={projectFilter || 'all'} onValueChange={setProjectFilter}>
-              <SelectTrigger className="bg-slate-900/50 border-blue-500/20 text-white focus:border-blue-500/50">
+              <SelectTrigger className="bg-white/5 border-white/10 text-white focus:ring-1 focus:ring-blue-500/50 h-10 rounded-xl transition-all">
                 <SelectValue placeholder="All Projects" />
               </SelectTrigger>
-              <SelectContent className="bg-slate-900 border-blue-500/30 text-white">
+              <SelectContent className="bg-slate-900 border-white/10 text-white rounded-xl shadow-2xl">
                 <SelectItem value="all">All Projects</SelectItem>
                 {uniqueProjects.map(project => (
                   <SelectItem key={project} value={project}>{project}</SelectItem>
@@ -948,15 +1092,15 @@ export default function TrackerPage({ user }: TrackerPageProps) {
             </Select>
           </div>
           <div className="space-y-2">
-            <label className="text-sm font-medium text-blue-200/70 flex items-center gap-2">
-              <Zap className="w-4 h-4" />
-              Select Task
+            <label className="text-[10px] font-bold uppercase tracking-wider text-blue-200/40 flex items-center gap-2">
+              <Zap className="w-3 h-3" />
+              Task
             </label>
             <Select value={taskFilter || 'all'} onValueChange={setTaskFilter}>
-              <SelectTrigger className="bg-slate-900/50 border-blue-500/20 text-white focus:border-blue-500/50">
+              <SelectTrigger className="bg-white/5 border-white/10 text-white focus:ring-1 focus:ring-blue-500/50 h-10 rounded-xl transition-all">
                 <SelectValue placeholder="All Tasks" />
               </SelectTrigger>
-              <SelectContent className="bg-slate-900 border-blue-500/30 text-white">
+              <SelectContent className="bg-slate-900 border-white/10 text-white rounded-xl shadow-2xl">
                 <SelectItem value="all">All Tasks</SelectItem>
                 {uniqueTasks.map(task => (
                   <SelectItem key={task} value={task}>{task}</SelectItem>
@@ -965,31 +1109,31 @@ export default function TrackerPage({ user }: TrackerPageProps) {
             </Select>
           </div>
           <div className="space-y-2">
-            <label className="text-sm font-medium text-blue-200/70 flex items-center gap-2">
-              <CalendarIcon className="w-4 h-4" />
+            <label className="text-[10px] font-bold uppercase tracking-wider text-blue-200/40 flex items-center gap-2">
+              <CalendarIcon className="w-3 h-3" />
               Start Date
             </label>
             <Input
               type="date"
               value={startDateFilter}
               onChange={(e) => setStartDateFilter(e.target.value)}
-              className="bg-slate-900/50 border-blue-500/20 text-white focus:border-blue-500/50"
+              className="bg-white/5 border-white/10 text-white focus:ring-1 focus:ring-blue-500/50 h-10 rounded-xl transition-all"
             />
           </div>
           <div className="space-y-2">
-            <label className="text-sm font-medium text-blue-200/70 flex items-center gap-2">
-              <CalendarIcon className="w-4 h-4" />
+            <label className="text-[10px] font-bold uppercase tracking-wider text-blue-200/40 flex items-center gap-2">
+              <CalendarIcon className="w-3 h-3" />
               End Date
             </label>
             <Input
               type="date"
               value={endDateFilter}
               onChange={(e) => setEndDateFilter(e.target.value)}
-              className="bg-slate-900/50 border-blue-500/20 text-white focus:border-blue-500/50"
+              className="bg-white/5 border-white/10 text-white focus:ring-1 focus:ring-blue-500/50 h-10 rounded-xl transition-all"
             />
           </div>
         </div>
-      </Card>
+      </div>
 
 
       {isLoading || isLoadingPMSTasks ? (
@@ -1000,130 +1144,109 @@ export default function TrackerPage({ user }: TrackerPageProps) {
         <>
           {/* Always show available PMS tasks if any exist */}
           {filteredAvailableTasksDropdown.length > 0 && (
-            <div className="space-y-3">
-              <Card className="bg-cyan-500/10 border-cyan-500/30 p-3">
+            <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <Zap className="w-4 h-4 text-cyan-400 flex-shrink-0" />
-                  <span className="text-cyan-200/70 text-sm">
-                    {filteredAvailableTasksDropdown.length} task{filteredAvailableTasksDropdown.length !== 1 ? 's' : ''} available - Click to add
-                  </span>
+                  <div className="p-2 rounded-lg bg-cyan-500/20">
+                    <Zap className="w-5 h-5 text-cyan-400" />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-bold text-white">Available Tasks</h2>
+                    <p className="text-xs text-blue-200/50">Pick a task to start tracking your time</p>
+                  </div>
                 </div>
-              </Card>
+                <span className="text-xs font-mono bg-blue-500/10 text-blue-300 px-2 py-1 rounded border border-blue-500/20">
+                  {filteredAvailableTasksDropdown.length} TOTAL
+                </span>
+              </div>
 
-              <Card className="bg-slate-800/50 border-blue-500/20 overflow-hidden">
-                <div className="divide-y divide-slate-700">
-                  {filteredAvailableTasksDropdown.map((task, index) => {
-                    // consider task already added locally
-                    const isAdded = pendingTasks.some(pt => (
-                      (pt.title === task.task_name || pt.title === task.task_name.trim()) && pt.project === task.projectName
-                    ));
+              <div className="flex flex-col gap-3">
+                {filteredAvailableTasksDropdown.map((task, index) => {
+                  const isAdded = pendingTasks.some(pt => (
+                    (pt.title === task.task_name || pt.title === task.task_name.trim()) && pt.project === task.projectName
+                  ));
 
-                    // Compute overdue locally as a fallback to avoid timezone-related server issues
-                    const formatDateLocal = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-                    const todayKey = formatDateLocal(new Date());
-                    const taskDeadline = task.taskDeadline ? new Date(task.taskDeadline) : null;
-                    const projectDeadline = task.projectDeadline ? new Date(task.projectDeadline) : null;
-                    const taskKey = taskDeadline ? formatDateLocal(taskDeadline) : null;
-                    const projectKey = projectDeadline ? formatDateLocal(projectDeadline) : null;
-                    const computedTaskOverdue = taskKey ? (taskKey < todayKey) : false;
-                    const computedProjectOverdue = projectKey ? (projectKey < todayKey) : false;
-                    // prefer server-provided task overdue flag when available, else use computed
-                    const taskOverdue = typeof task.isTaskOverdue === 'boolean' ? task.isTaskOverdue : computedTaskOverdue;
-                    const projectOverdue = typeof task.isProjectOverdue === 'boolean' ? task.isProjectOverdue : computedProjectOverdue;
-                    // deadline to display next to task: prefer task deadline, fallback to project deadline
-                    const deadline = taskDeadline || projectDeadline;
-                    const deadlineText = deadline ? deadline.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : null;
+                  const formatDateLocal = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                  const todayKey = formatDateLocal(new Date());
+                  const taskDeadline = task.taskDeadline ? new Date(task.taskDeadline) : null;
+                  const projectDeadline = task.projectDeadline ? new Date(task.projectDeadline) : null;
+                  const taskKey = taskDeadline ? formatDateLocal(taskDeadline) : null;
+                  const projectKey = projectDeadline ? formatDateLocal(projectDeadline) : null;
+                  const computedTaskOverdue = taskKey ? (taskKey < todayKey) : false;
+                  const computedProjectOverdue = projectKey ? (projectKey < todayKey) : false;
+                  const taskOverdue = typeof task.isTaskOverdue === 'boolean' ? task.isTaskOverdue : computedTaskOverdue;
+                  const projectOverdue = typeof task.isProjectOverdue === 'boolean' ? task.isProjectOverdue : computedProjectOverdue;
+                  const deadline = taskDeadline || projectDeadline;
+                  const deadlineText = deadline ? deadline.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : null;
 
-                    return (
-                      <div
-                        key={index}
-                        className={`flex items-center justify-between gap-3 p-3 transition-colors ${taskOverdue
-                          ? 'bg-red-500/5 hover:bg-red-500/10'
-                          : 'hover:bg-slate-700/50'
-                          }`}
-                      >
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-1 flex-wrap">
-                            <span className="inline-block px-2 py-0.5 text-xs font-medium bg-blue-600/50 text-blue-100 rounded whitespace-nowrap">
+                  return (
+                    <div
+                      key={index}
+                      className={`glass-card group hover-glow border-none p-4 rounded-xl flex items-center justify-between gap-4 transition-all duration-300 ${isAdded ? 'opacity-50 grayscale-[0.5]' : ''
+                        }`}
+                    >
+                      <div className="flex items-center gap-4 flex-1 min-w-0">
+                        <div className={`p-2 rounded-lg ${taskOverdue ? 'bg-red-500/20 text-red-400' : 'bg-blue-500/20 text-blue-400'}`}>
+                          {taskOverdue ? <AlertCircle className="w-5 h-5 flex-shrink-0" /> : <Clock className="w-5 h-5 flex-shrink-0" />}
+                        </div>
+
+                        <div className="flex-1 min-w-0 space-y-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider bg-blue-500/10 text-blue-200/70 rounded border border-blue-500/10 whitespace-nowrap">
                               {task.projectName}
                             </span>
                             {isAdded && (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-green-600/60 text-green-100 rounded">
+                              <span className="flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold uppercase bg-green-500/10 text-green-400 rounded border border-green-500/10">
                                 <CheckCircle className="w-3 h-3" />
                                 Added
                               </span>
                             )}
-                            {taskOverdue && (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-red-600/70 text-red-100 rounded">
-                                <AlertCircle className="w-3 h-3" />
-                                Deadline Over
-                              </span>
-                            )}
-                            {!taskOverdue && projectOverdue && (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-amber-600/40 text-amber-100 rounded">
-                                <AlertCircle className="w-3 h-3" />
-                                Project Deadline Over
-                              </span>
-                            )}
-                            {deadline && !taskOverdue && (
-                              <span className="inline-block px-2 py-0.5 text-xs text-yellow-200/70 bg-yellow-500/10 rounded">
-                                Due: {deadlineText}
-                              </span>
-                            )}
-                            {deadline && taskOverdue && (
-                              <span className="inline-block px-2 py-0.5 text-xs text-red-200 bg-red-500/10 rounded">
-                                Was due: {deadlineText}
+                            {deadline && (
+                              <span className={`px-2 py-0.5 text-[10px] font-bold uppercase rounded border ${taskOverdue
+                                ? 'bg-red-500/10 text-red-400 border-red-500/10'
+                                : 'bg-yellow-500/10 text-yellow-200/70 border-yellow-500/10'
+                                }`}>
+                                {taskOverdue ? 'Was Due: ' : 'Due: '} {deadlineText}
                               </span>
                             )}
                           </div>
-                          <p className={`text-sm font-medium truncate ${taskOverdue ? 'text-red-300' : 'text-white'}`}>
+                          <h3 className={`text-sm font-semibold truncate ${taskOverdue ? 'text-red-300' : 'text-white'}`}>
                             {task.task_name}
-                          </p>
-                          {task.description && (
-                            <p className="text-blue-200/60 text-xs truncate">
-                              {task.description}
-                            </p>
-                          )}
+                          </h3>
                         </div>
-                        <Button
-                          onClick={() => {
-                            if (isAdded) {
-                              toast({ title: 'Already added', description: 'This task is already in your pending list.' });
-                              return;
-                            }
-                            handleQuickAddTask(task);
-                          }}
-                          variant="outline"
-                          size="sm"
-                          disabled={isAdded}
-                          className={`$${isAdded ? 'opacity-60 cursor-not-allowed' : taskOverdue
-                            ? 'bg-red-700 hover:bg-red-600 border-red-500/50'
-                            : 'bg-slate-700 hover:bg-slate-600 border-blue-500/30'
-                            } text-white whitespace-nowrap flex-shrink-0`}
-                        >
-                          <Plus className="w-3 h-3" />
-                        </Button>
                       </div>
-                    );
-                  })}
-                </div>
-              </Card>
+
+                      <Button
+                        onClick={() => !isAdded && handleQuickAddTask(task)}
+                        disabled={isAdded}
+                        size="sm"
+                        className={`${isAdded
+                          ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                          : taskOverdue
+                            ? 'bg-red-600/20 text-red-100 hover:bg-red-600 border border-red-500/30'
+                            : 'bg-blue-600/20 text-blue-100 hover:bg-blue-600 border border-blue-500/30'
+                          } h-9 px-4 rounded-lg font-bold transition-all duration-300 whitespace-nowrap`}
+                      >
+                        {isAdded ? 'Added' : <><Plus className="w-4 h-4 mr-2" /> Add Task</>}
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
 
-          {/* If fetching failed and no PMS tasks are available, show an error */}
-          {availableTasks.length === 0 && pmsError && (
-            <Card className="bg-red-500/10 border-red-500/30 p-4">
-              <div className="flex items-start gap-3">
-                <div className="text-red-400">⚠️</div>
-                <div>
-                  <h3 className="font-semibold text-white mb-1">Error Loading Available Tasks</h3>
-                  <p className="text-red-200/70 text-sm">
-                    Unable to fetch available PMS tasks. Please try again or add a task manually.
-                  </p>
-                </div>
+          {/* No assigned tasks message */}
+          {availableTasks.length === 0 && !isLoadingPMSTasks && !pmsError && (
+            <div className="glass-card p-8 rounded-2xl border-dashed border-2 border-white/5 flex flex-col items-center justify-center text-center space-y-3">
+              <Zap className="w-12 h-12 text-blue-500/20" />
+              <div>
+                <h3 className="text-lg font-bold text-white/50">No Assigned Tasks Found</h3>
+                <p className="text-sm text-blue-200/30 max-w-xs mx-auto">
+                  Only tasks assigned directly to you in the PMS are shown here. Please contact your manager if you don't see your current work.
+                </p>
               </div>
-            </Card>
+            </div>
           )}
 
           {/* Show the user's task table when there are tasks (server or pending) */}
@@ -1133,14 +1256,16 @@ export default function TrackerPage({ user }: TrackerPageProps) {
               onEdit={handleEditTask}
               onDelete={handleDeleteTask}
               onComplete={handleCompleteTask}
+              onResubmit={handleResubmitTask}
             />
           )}
 
           {/* No results message */}
           {((projectFilter && projectFilter !== 'all') || (taskFilter && taskFilter !== 'all') || startDateFilter || endDateFilter) && filteredAvailableTasksDropdown.length === 0 && filteredAllTasksDropdown.length === 0 && (
-            <div className="flex flex-col items-center justify-center py-12 text-blue-200/40">
+            <div className="flex flex-col items-center justify-center py-12 text-blue-200/40 bg-white/5 rounded-2xl border border-dashed border-blue-500/10">
               <AlertCircle className="w-12 h-12 mb-4 opacity-20" />
-              <p>No tasks match your filters.</p>
+              <p className="text-lg font-semibold text-white/80">No tasks found</p>
+              <p className="text-sm mt-1 px-4 text-center">Make sure you have tasks assigned to you in the selected project.</p>
               <Button
                 variant="ghost"
                 onClick={() => {
@@ -1149,9 +1274,9 @@ export default function TrackerPage({ user }: TrackerPageProps) {
                   setStartDateFilter('');
                   setEndDateFilter('');
                 }}
-                className="text-blue-400 hover:text-blue-300 hover:bg-transparent p-0 h-auto font-normal"
+                className="text-blue-400 hover:text-blue-300 hover:bg-transparent mt-4 p-0 h-auto font-normal"
               >
-                Clear Filters
+                Clear All Filters
               </Button>
             </div>
           )}
@@ -1182,45 +1307,55 @@ export default function TrackerPage({ user }: TrackerPageProps) {
       </div>
 
       {/* Export Section */}
-      <div className="border-t border-blue-500/20 pt-6">
-        <Card className="bg-slate-800/50 border-blue-500/20 p-6">
-          <div className="flex flex-col md:flex-row items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 rounded-lg bg-green-500/20">
-                <FileSpreadsheet className="w-6 h-6 text-green-400" />
+      <div className="border-t border-white/5 pt-8">
+        <div className="glass-card rounded-2xl p-8 border-none overflow-hidden relative group hover-glow transition-all duration-500">
+          <div className="absolute top-0 right-0 p-8 opacity-[0.03] group-hover:opacity-[0.07] transition-opacity duration-700">
+            <FileSpreadsheet className="w-32 h-32" />
+          </div>
+
+          <div className="flex flex-col md:flex-row items-center justify-between gap-8 relative z-10">
+            <div className="flex items-center gap-6">
+              <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 shadow-inner">
+                <FileSpreadsheet className="w-8 h-8 text-emerald-400" />
               </div>
-              <div>
-                <h3 className="text-lg font-semibold text-white">Export Time Entries</h3>
-                <p className="text-blue-200/60 text-sm">
-                  Download all your time entries as an Excel file
+              <div className="space-y-1">
+                <h3 className="text-xl font-bold text-white leading-tight">Export Time Entries</h3>
+                <p className="text-sm text-blue-200/40">
+                  Generate a professional Excel report of your tracked work
                 </p>
               </div>
             </div>
+
             <Button
               onClick={handleExportToExcel}
-              className="bg-gradient-to-r from-green-600 to-emerald-600 text-white"
+              className="bg-gradient-to-r from-emerald-600 to-green-500 text-white h-12 px-8 rounded-xl font-bold shadow-lg shadow-emerald-900/40 hover:shadow-emerald-900/60 hover:-translate-y-0.5 transition-all duration-300"
               disabled={serverEntries.length === 0}
               data-testid="button-export-excel"
             >
               <Download className="w-4 h-4 mr-2" />
-              Export to Excel
+              Download Report
             </Button>
           </div>
-          <div className="mt-4 flex flex-wrap gap-2">
-            <span className="text-xs text-blue-200/60 bg-slate-700/50 px-2 py-1 rounded">
-              Total Entries: {serverEntries.length}
-            </span>
-            <span className="text-xs text-green-400/60 bg-green-500/10 px-2 py-1 rounded">
-              Approved: {serverEntries.filter(e => e.status === 'approved').length}
-            </span>
-            <span className="text-xs text-yellow-400/60 bg-yellow-500/10 px-2 py-1 rounded">
-              Pending: {serverEntries.filter(e => e.status === 'pending').length}
-            </span>
-            <span className="text-xs text-red-400/60 bg-red-500/10 px-2 py-1 rounded">
-              Rejected: {serverEntries.filter(e => e.status === 'rejected').length}
-            </span>
+
+          <div className="mt-8 flex flex-wrap gap-3">
+            <div className="px-3 py-1.5 rounded-lg bg-blue-500/5 border border-blue-500/10 flex items-center gap-2">
+              <span className="text-[10px] uppercase font-bold text-blue-200/30">Total</span>
+              <span className="text-xs font-mono text-blue-100">{serverEntries.length}</span>
+            </div>
+            <div className="px-3 py-1.5 rounded-lg bg-emerald-500/5 border border-emerald-500/10 flex items-center gap-2">
+              <span className="text-[10px] uppercase font-bold text-emerald-500/30">Approved</span>
+              <span className="text-xs font-mono text-emerald-100">{serverEntries.filter(e => e.status === 'approved').length}</span>
+            </div>
+            <div className="px-3 py-1.5 rounded-lg bg-amber-500/5 border border-amber-500/10 flex items-center gap-2">
+              <span className="text-[10px] uppercase font-bold text-amber-500/30">Pending</span>
+              <span className="text-xs font-mono text-amber-100">{serverEntries.filter(e => e.status === 'pending').length}</span>
+            </div>
+            <div className="px-3 py-1.5 rounded-lg bg-rose-500/5 border border-rose-500/10 flex items-center gap-2">
+              <span className="text-[10px] uppercase font-bold text-rose-500/30">Rejected</span>
+              <span className="text-xs font-mono text-rose-100">{serverEntries.filter(e => e.status === 'rejected').length}</span>
+            </div>
           </div>
-        </Card>
+        </div>
       </div>
 
       {/* Submission Confirmation Dialog */}

@@ -11,7 +11,7 @@ import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
-import { Check, X, Search, Filter, RefreshCw, Clock, Loader2, Wrench, Target, Trophy, TrendingUp, AlertCircle, ChevronDown, ChevronUp, FileText, Calendar as CalendarIcon, CheckCircle2, ListFilter } from 'lucide-react';
+import { Check, X, Search, Filter, RefreshCw, Clock, Loader2, Wrench, Target, Trophy, TrendingUp, AlertCircle, ChevronDown, ChevronUp, FileText, Calendar as CalendarIcon, CheckCircle2, ListFilter, PauseCircle, MessageSquare, Zap } from 'lucide-react';
 import { User } from '@/context/AuthContext';
 import { useToast } from '@/hooks/use-toast';
 import { apiRequest, queryClient } from '@/lib/queryClient';
@@ -29,6 +29,12 @@ interface ExtendedTimeEntry extends TimeEntry {
   endTime: string;
   achievements: string | null;
   quantify: string;
+  onHoldReason: string | null;
+  lmsData?: {
+    leaveHours: number;
+    permissionHours: number;
+    totalLMSHours: number;
+  };
 }
 
 const parseTaskDescription = (taskDesc: string, entry?: ExtendedTimeEntry) => {
@@ -94,6 +100,8 @@ export default function ApprovalPage({ user }: { user: User }) {
   const [bulkRejectDialogOpen, setBulkRejectDialogOpen] = useState(false);
   const [selectedEntry, setSelectedEntry] = useState<ExtendedTimeEntry | null>(null);
   const [rejectionReason, setRejectionReason] = useState('');
+  const [onHoldReason, setOnHoldReason] = useState('');
+  const [onHoldDialogOpen, setOnHoldDialogOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(undefined);
 
   const { data: rawTimeEntries = [], isLoading, refetch } = useQuery<ExtendedTimeEntry[]>({
@@ -114,12 +122,13 @@ export default function ApprovalPage({ user }: { user: User }) {
   const stats = useMemo(() => {
     return uniqueTimeEntries.reduce((acc, entry) => {
       acc.total++;
-      if (entry.status === 'pending') acc.pending++;
+      if (entry.status === 'pending' || entry.status === 'resubmitted') acc.pending++;
       else if (entry.status === 'manager_approved') acc.manager_approved++;
       else if (entry.status === 'approved') acc.approved++;
       else if (entry.status === 'rejected') acc.rejected++;
+      else if (entry.status === 'on_hold') acc.on_hold++;
       return acc;
-    }, { total: 0, pending: 0, manager_approved: 0, approved: 0, rejected: 0 });
+    }, { total: 0, pending: 0, manager_approved: 0, approved: 0, rejected: 0, on_hold: 0 });
   }, [uniqueTimeEntries]);
 
   useWebSocket({
@@ -149,6 +158,15 @@ export default function ApprovalPage({ user }: { user: User }) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['/api/time-entries'] });
       toast({ title: "Rejected", variant: "destructive" });
+    },
+  });
+
+  const onHoldMutation = useMutation({
+    mutationFn: async ({ id, reason }: { id: string; reason: string }) =>
+      apiRequest('PATCH', `/api/time-entries/${id}/on-hold`, { managerId: user.id, reason }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/time-entries'] });
+      toast({ title: "Put On Hold", variant: "default" });
     },
   });
 
@@ -241,6 +259,14 @@ export default function ApprovalPage({ user }: { user: User }) {
     }
   };
 
+  const confirmOnHold = () => {
+    if (selectedEntry && onHoldReason.trim()) {
+      onHoldMutation.mutate({ id: selectedEntry.id.toString(), reason: onHoldReason });
+      setOnHoldDialogOpen(false);
+      setOnHoldReason('');
+    }
+  };
+
   const confirmBulkReject = () => {
     if (rejectionReason.trim() && selectedIds.size > 0) {
       bulkRejectMutation.mutate({ ids: Array.from(selectedIds), reason: rejectionReason });
@@ -310,6 +336,10 @@ export default function ApprovalPage({ user }: { user: User }) {
           <span className="text-[10px] text-red-400 font-bold uppercase mb-1">Rejected</span>
           <span className="text-xl font-bold text-red-400">{stats.rejected}</span>
         </Card>
+        <Card className="bg-orange-500/5 border-orange-500/20 p-3 flex flex-col items-center justify-center text-center">
+          <span className="text-[10px] text-orange-400 font-bold uppercase mb-1">On Hold</span>
+          <span className="text-xl font-bold text-orange-400">{stats.on_hold}</span>
+        </Card>
       </div>
 
       {/* Filter Section */}
@@ -334,9 +364,11 @@ export default function ApprovalPage({ user }: { user: User }) {
               <SelectContent className="bg-slate-900 border-blue-500/20">
                 <SelectItem value="all">All Status</SelectItem>
                 <SelectItem value="pending">Pending</SelectItem>
+                <SelectItem value="resubmitted">Resubmitted</SelectItem>
                 <SelectItem value="manager_approved">Manager Approved</SelectItem>
                 <SelectItem value="approved">Approved</SelectItem>
                 <SelectItem value="rejected">Rejected</SelectItem>
+                <SelectItem value="on_hold">On Hold</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -466,13 +498,18 @@ export default function ApprovalPage({ user }: { user: User }) {
                     </div>
                   </div>
                   <Badge className={`uppercase text-[10px] px-2 py-0.5 ${entry.status === 'pending' ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' :
+                    entry.status === 'resubmitted' ? 'bg-orange-500/20 text-orange-400 border-orange-500/50 shadow-[0_0_10px_rgba(249,115,22,0.4)] animate-pulse' :
                       entry.status === 'approved' ? 'bg-green-500/20 text-green-400 border-green-500/30' :
                         entry.status === 'manager_approved' ? 'bg-blue-500/20 text-blue-400 border-blue-500/30' :
-                          'bg-red-500/20 text-red-400 border-red-500/30'
+                          entry.status === 'on_hold' ? 'bg-orange-500/20 text-orange-400 border-orange-500/30' :
+                            'bg-red-500/20 text-red-400 border-red-500/30'
                     } border`}>
                     {entry.status ? entry.status.replace('_', ' ') : 'pending'}
                   </Badge>
                 </div>
+
+                {/* LMS Hours Summary (if any) */}
+                <LMSHoursDisplay employeeCode={entry.employeeCode} date={entry.date} />
 
                 {/* Projects & Task Brief */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs mb-3">
@@ -522,6 +559,16 @@ export default function ApprovalPage({ user }: { user: User }) {
                       </div>
                       <TaskDetailRow label="Description" value={entry.taskDescription.split(' | ')[2] || parsed.description} icon={FileText} colorClass="border-blue-500/10 bg-blue-500/5" />
                     </div>
+
+                    {entry.status === 'on_hold' && entry.onHoldReason && (
+                      <div className="bg-orange-500/5 p-3 rounded-lg border border-orange-500/20 flex items-start gap-3">
+                        <AlertCircle className="w-4 h-4 text-orange-400 mt-0.5" />
+                        <div>
+                          <span className="text-orange-400 font-bold uppercase text-[9px] block mb-1">On Hold Reason</span>
+                          <p className="text-blue-100/70 text-xs leading-relaxed">{entry.onHoldReason}</p>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -544,6 +591,15 @@ export default function ApprovalPage({ user }: { user: User }) {
                     <div className="flex gap-2">
                       <Button
                         size="sm"
+                        variant="secondary"
+                        className="h-8 text-xs px-4 bg-orange-600/20 text-orange-400 border border-orange-500/20 hover:bg-orange-600/30"
+                        onClick={() => { setSelectedEntry(entry); setOnHoldDialogOpen(true); }}
+                      >
+                        <PauseCircle className="w-3.5 h-3.5 mr-1.5" />
+                        On Hold
+                      </Button>
+                      <Button
+                        size="sm"
                         variant="destructive"
                         className="h-8 text-xs px-4"
                         onClick={() => { setSelectedEntry(entry); setRejectDialogOpen(true); }}
@@ -560,6 +616,19 @@ export default function ApprovalPage({ user }: { user: User }) {
                         Approve
                       </Button>
                     </div>
+                  )}
+                  {entry.status === 'on_hold' && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8 text-xs px-4 bg-blue-500/10 border-blue-500/20 text-blue-400 hover:bg-blue-500/20"
+                      onClick={() => {
+                        window.location.href = `/discussion?entryId=${entry.id}`;
+                      }}
+                    >
+                      <MessageSquare className="w-3.5 h-3.5 mr-1.5" />
+                      Discuss
+                    </Button>
                   )}
                 </div>
               </Card>
@@ -615,6 +684,73 @@ export default function ApprovalPage({ user }: { user: User }) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <Dialog open={onHoldDialogOpen} onOpenChange={setOnHoldDialogOpen}>
+        <DialogContent className="bg-slate-900 border-blue-500/20 sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-white">Put Task On Hold</DialogTitle>
+            <DialogDescription className="text-blue-200/60 text-sm">
+              Please provide a reason why this task is being put on hold.
+            </DialogDescription>
+          </DialogHeader>
+          <Textarea
+            placeholder="Reason for holding..."
+            value={onHoldReason}
+            onChange={(e) => setOnHoldReason(e.target.value)}
+            className="bg-slate-800 border-blue-500/20 text-white min-h-[120px] focus:ring-blue-500/50"
+          />
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="ghost" size="sm" onClick={() => { setOnHoldDialogOpen(false); setOnHoldReason(''); }}>Cancel</Button>
+            <Button variant="secondary" size="sm" onClick={confirmOnHold} disabled={!onHoldReason.trim() || onHoldMutation.isPending} className="bg-orange-600 hover:bg-orange-500">
+              {onHoldMutation.isPending && <Loader2 className="w-3 h-3 mr-2 animate-spin" />}
+              Confirm On Hold
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+// Sub-component to fetch and display LMS hours for a specific employee and date
+function LMSHoursDisplay({ employeeCode, date }: { employeeCode: string; date: string }) {
+  const { data: lmsHours } = useQuery<{ leaveHours: number; permissionHours: number; totalLMSHours: number }>({
+    queryKey: ['/api/lms/hours', employeeCode, date],
+    queryFn: async () => {
+      const response = await fetch(`/api/lms/hours?employeeCode=${employeeCode}&date=${date}`);
+      if (!response.ok) return null;
+      return response.json();
+    },
+    enabled: !!employeeCode && !!date,
+    staleTime: 5 * 60 * 1000, // 5 minutes cache
+  });
+
+  if (!lmsHours || lmsHours.totalLMSHours === 0) return null;
+
+  return (
+    <div className="flex flex-wrap gap-2 mb-4 p-2 rounded-lg bg-blue-500/5 border border-blue-500/10 shadow-inner">
+      <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-blue-500/10 border border-blue-500/20">
+        <Clock className="w-3.5 h-3.5 text-blue-400" />
+        <span className="text-[9px] font-extrabold uppercase tracking-widest text-blue-300/60">LMS Data</span>
+      </div>
+      
+      {lmsHours.leaveHours > 0 && (
+        <Badge className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-none shadow-md shadow-blue-900/40 text-[10px] py-1 px-3 font-bold">
+          <CalendarIcon className="w-3 h-3 mr-1.5" />
+          Leave: {lmsHours.leaveHours}h
+        </Badge>
+      )}
+      
+      {lmsHours.permissionHours > 0 && (
+        <Badge className="bg-gradient-to-r from-purple-600 to-pink-600 text-white border-none shadow-md shadow-purple-900/40 text-[10px] py-1 px-3 font-bold">
+          <Zap className="w-3 h-3 mr-1.5" />
+          Permission: {lmsHours.permissionHours}h
+        </Badge>
+      )}
+      
+      <div className="ml-auto flex items-center gap-2 px-3 py-1 rounded-md bg-cyan-500/10 border border-cyan-500/20">
+        <span className="text-[10px] font-bold uppercase tracking-widest text-cyan-400">Total</span>
+        <span className="text-sm font-black text-white">{lmsHours.totalLMSHours}h</span>
+      </div>
     </div>
   );
 }
