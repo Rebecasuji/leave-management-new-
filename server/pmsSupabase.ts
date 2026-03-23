@@ -429,6 +429,8 @@ export const updateSubtaskProgress = async (subtaskId: string, progress: number)
     );
     if (result.rows && result.rows.length > 0) {
       const taskId = result.rows[0].task_id;
+      // We pass 100 as progress if we know it's 100, but updateTaskProgress will recalculate anyway.
+      // We don't have the date here easily, so we might need to pass it from routes.ts if we want end_date.
       await updateTaskProgress(taskId);
       return true;
     }
@@ -440,7 +442,7 @@ export const updateSubtaskProgress = async (subtaskId: string, progress: number)
 };
 
 // Recalculate task progress based on subtasks
-export const updateTaskProgress = async (taskId: string, directProgress?: number): Promise<boolean> => {
+export const updateTaskProgress = async (taskId: string, directProgress?: number, date?: string): Promise<boolean> => {
   try {
     console.log(`🔍 Recalculating progress for task ${taskId}`);
     const subtasks = await getSubtasks(taskId);
@@ -457,9 +459,18 @@ export const updateTaskProgress = async (taskId: string, directProgress?: number
       return false;
     }
 
+    const setParts = [`progress = $1`, `status = $2`, `updated_at = NOW()`];
+    const queryParams: any[] = [progress, progress === 100 ? 'Completed' : 'In Progress'];
+    
+    if (progress === 100 && date) {
+      setParts.push(`end_date = $${queryParams.length + 1}`);
+      queryParams.push(date);
+    }
+    
+    queryParams.push(taskId);
     const result: QueryResult = await pmsPool.query(
-      'UPDATE project_tasks SET progress = $1, status = $2, updated_at = NOW() WHERE id = $3::uuid RETURNING key_step_id',
-      [progress, progress === 100 ? 'Completed' : 'In Progress', taskId]
+      `UPDATE project_tasks SET ${setParts.join(', ')} WHERE id = $${queryParams.length}::uuid RETURNING key_step_id`,
+      queryParams
     );
 
     if (result.rows && result.rows.length > 0) {
@@ -533,12 +544,72 @@ export const updateProjectProgressFromChildren = async (projectId: string): Prom
     }
 
     const result = await pmsPool.query(
-      'UPDATE projects SET progress = $1, status = $2, updated_at = NOW() WHERE id::text = $3 OR project_code = $3',
+      'UPDATE projects SET progress = $1, status = $2, updated_at = NOW() WHERE id::text = $3 OR project_code = $3 OR LOWER(TRIM(title)) = LOWER(TRIM($3)) RETURNING id',
       [progress, progress === 100 ? 'Completed' : 'In Progress', projectId]
     );
     return (result.rowCount ?? 0) > 0;
   } catch (error) {
     console.error('💥 Error updating project progress from children in PMS:', error);
     return false;
+  }
+};
+
+// Helper to get current project progress
+export const getProjectProgress = async (projectId: string): Promise<number> => {
+  try {
+    const res = await pmsPool.query('SELECT progress FROM projects WHERE id::text = $1 OR project_code = $1 OR LOWER(TRIM(title)) = LOWER(TRIM($1))', [projectId]);
+    return res.rows[0]?.progress || 0;
+  } catch (error) {
+    console.error('Error fetching project progress:', error);
+    return 0;
+  }
+};
+
+// Insert site report into PMS database
+export const saveSiteReportToPMS = async (report: any) => {
+  try {
+    console.log(`📡 Saving site report for ${report.projectName} to PMS internal records`);
+    
+    // Check if table exists, if not create it (best effort for "internal records")
+    await pmsPool.query(`
+      CREATE TABLE IF NOT EXISTS site_reports (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        employee_id TEXT,
+        employee_name TEXT,
+        project_name TEXT,
+        date TEXT,
+        work_category TEXT,
+        start_time TEXT,
+        end_time TEXT,
+        duration TEXT,
+        work_done TEXT,
+        issues_faced TEXT,
+        materials_used TEXT,
+        labor_count INTEGER,
+        location_lat TEXT,
+        location_lng TEXT,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+
+    const query = `
+      INSERT INTO site_reports (
+        employee_id, employee_name, project_name, date, work_category, 
+        start_time, end_time, duration, work_done, issues_faced, 
+        materials_used, labor_count, location_lat, location_lng
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      RETURNING *
+    `;
+    const params = [
+      report.employeeId, report.employeeName, report.projectName, report.date, report.workCategory,
+      report.startTime, report.endTime, report.duration, report.workDone, report.issuesFaced,
+      report.materialsUsed, report.laborCount, report.locationLat, report.locationLng
+    ];
+
+    const result = await pmsPool.query(query, params);
+    return result.rows[0];
+  } catch (error) {
+    console.error('💥 Error saving site report to PMS:', error);
+    return null;
   }
 };

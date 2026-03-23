@@ -72,11 +72,13 @@ export async function sendTimesheetSummaryEmail(data: {
   employeeCode: string;
   date: string;
   totalHours: string;
+  taskHours?: string;
+  lmsHours?: string;
   tasks: TimeEntry[];
   status: string; // usually 'pending'
 }) {
   try {
-    const { employeeName, employeeCode, date, totalHours, tasks } = data;
+    const { employeeName, employeeCode, date, totalHours, taskHours, lmsHours, tasks } = data;
     const taskTable = generateTaskTable(tasks);
 
     const { data: result, error } = await resend.emails.send({
@@ -93,7 +95,9 @@ export async function sendTimesheetSummaryEmail(data: {
           <h2 style="color:#0f172a;margin-top:0;">New Timesheet Submission</h2>
           <p><strong>Employee:</strong> ${employeeName} (${employeeCode})</p>
           <p><strong>Date:</strong> ${date}</p>
-          <p><strong>Total Hours:</strong> ${totalHours}</p>
+          <p><strong>Total Hours:</strong> <span style="font-size: 1.25rem; font-weight: bold; color: #3b82f6;">${totalHours}</span></p>
+          ${taskHours ? `<p style="font-size: 12px; color: #64748b; margin-bottom: 2px;">• Task Work: ${taskHours}</p>` : ''}
+          ${lmsHours ? `<p style="font-size: 12px; color: #64748b; margin-top: 2px;">• LMS Approved: ${lmsHours}</p>` : ''}
           ${taskTable}
         </div>
         <div style="background:#1e293b;padding:15px;text-align:center;">

@@ -23,6 +23,7 @@ import {
   CalendarClock,
   AlertCircle,
   MessageSquare,
+  HardHat,
 } from 'lucide-react';
 import { UserRole } from '@/context/AuthContext';
 import logoImage from '@assets/WhatsApp_Image_2025-11-11_at_11.06.02_AM_1765464690595.jpeg';
@@ -44,6 +45,7 @@ export default function AppSidebar({ userRole, pendingApprovals = 0, pendingReje
     { title: 'Tracker', url: '/tracker', icon: Clock, roles: ['employee', 'manager', 'hr', 'admin'] as UserRole[] },
     { title: 'Approvals', url: '/approvals', icon: CheckSquare, roles: ['manager', 'hr', 'admin'] as UserRole[], badge: pendingApprovals },
     { title: 'Reports', url: '/reports', icon: FileText, roles: ['employee', 'manager', 'hr', 'admin'] as UserRole[] },
+    { title: 'Site Timesheet', url: '/site-timesheet', icon: HardHat, roles: ['employee', 'manager', 'hr', 'admin'] as UserRole[] },
     { title: 'Rejections', url: '/rejections', icon: AlertCircle, roles: ['employee', 'manager', 'hr', 'admin'] as UserRole[], badge: pendingRejections },
     { title: 'Discussions', url: '/discussion', icon: MessageSquare, roles: ['employee', 'manager', 'hr', 'admin'] as UserRole[], badge: pendingOnHold },
     { title: 'Analytics', url: '/analytics', icon: BarChart3, roles: ['admin'] as UserRole[] },

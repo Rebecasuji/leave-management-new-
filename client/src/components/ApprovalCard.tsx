@@ -10,6 +10,7 @@ import { Check, X, Clock, User, Calendar, ChevronDown, ChevronUp, AlertCircle, F
 interface TaskSummary {
   project: string;
   taskName: string;
+  keyStep: string;
   subtask: string;
   duration: string;
   description: string;
@@ -122,10 +123,14 @@ export default function ApprovalCard({
               {submission.tasks.map((task, i) => (
                 <div key={i} className="space-y-4">
                   {/* Top Row: Project, Task, Subtask */}
-                  <div className="grid grid-cols-3 gap-4">
+                  <div className="grid grid-cols-4 gap-4">
                     <div className="p-3 bg-slate-800/40 rounded-lg border border-white/5">
                       <p className="text-[10px] font-bold text-cyan-400 mb-1 uppercase">Project</p>
                       <p className="text-sm text-white font-medium">{task.project}</p>
+                    </div>
+                    <div className="p-3 bg-slate-800/40 rounded-lg border border-white/5">
+                      <p className="text-[10px] font-bold text-indigo-400 mb-1 uppercase">Key Step</p>
+                      <p className="text-sm text-white font-medium">{task.keyStep || "N/A"}</p>
                     </div>
                     <div className="p-3 bg-slate-800/40 rounded-lg border border-white/5">
                       <p className="text-[10px] font-bold text-purple-400 mb-1 uppercase">Task</p>

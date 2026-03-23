@@ -55,7 +55,16 @@ const formatTaskDescription = (task: any) => {
 
 export default function TrackerPage({ user }: TrackerPageProps) {
   const { toast } = useToast();
-  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
+  // Initialize date from URL query parameter if available
+  const [selectedDate, setSelectedDate] = useState<Date>(() => {
+    const params = new URLSearchParams(window.location.search);
+    const dateParam = params.get('date');
+    if (dateParam) {
+      const parsedDate = new Date(dateParam);
+      if (!isNaN(parsedDate.getTime())) return parsedDate;
+    }
+    return new Date();
+  });
   const [shiftHours, setShiftHours] = useState<4 | 8 | 12>(8);
   const [, setLocation] = useLocation();
   const [showAnalytics, setShowAnalytics] = useState(true);
@@ -333,6 +342,7 @@ export default function TrackerPage({ user }: TrackerPageProps) {
         percentageComplete: entry.percentageComplete ?? 0,
         pmsId: entry.pmsId || undefined,
         pmsSubtaskId: entry.pmsSubtaskId || undefined,
+        keyStep: (entry as any).keyStep || undefined,
         isComplete: entry.status === 'approved',
         serverStatus: entry.status as Task['serverStatus'],
         date: entry.date,
@@ -616,7 +626,7 @@ export default function TrackerPage({ user }: TrackerPageProps) {
         setIsSubmitting(false);
         return;
       }
-      if (totalWorkedMinutes < shiftHours * 60) {
+      if (totalCombinedMinutes < shiftHours * 60) {
         toast({ title: 'Shift incomplete', description: 'You have not reached your shift target yet.', variant: 'destructive' });
         setIsSubmitting(false);
         return;
@@ -873,7 +883,7 @@ export default function TrackerPage({ user }: TrackerPageProps) {
 
   return (
     <div className="p-4 md:p-6 space-y-6" data-testid="tracker-page">
-      <GreetingAssistant userName={user.name} />
+      {user?.name?.toLowerCase() !== 'durga devi' && <GreetingAssistant userName={user.name} />}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-white" style={{ fontFamily: 'Space Grotesk' }}>
@@ -1514,9 +1524,23 @@ export default function TrackerPage({ user }: TrackerPageProps) {
                   </tbody>
                   <tfoot className="bg-slate-800">
                     <tr className="border-t border-slate-700">
-                      <td colSpan={3} className="px-3 py-2 text-right font-semibold text-white">Total:</td>
-                      <td className="px-3 py-2 font-semibold text-cyan-400">
+                      <td colSpan={3} className="px-3 py-2 text-right text-xs text-blue-200/60">Task Total:</td>
+                      <td className="px-3 py-2 text-xs text-blue-100">
                         {formatDuration(submittedTasks.reduce((acc, t) => acc + t.durationMinutes, 0))}
+                      </td>
+                    </tr>
+                    {lmsMinutes > 0 && (
+                      <tr className="border-t border-slate-700/30">
+                        <td colSpan={3} className="px-3 py-2 text-right text-xs text-blue-200/60">LMS Approved:</td>
+                        <td className="px-3 py-2 text-xs text-blue-100">
+                          {formatDuration(lmsMinutes)}
+                        </td>
+                      </tr>
+                    )}
+                    <tr className="border-t border-slate-700">
+                      <td colSpan={3} className="px-3 py-2 text-right font-semibold text-white">Final Total:</td>
+                      <td className="px-3 py-2 font-semibold text-cyan-400">
+                        {formatDuration(submittedTasks.reduce((acc, t) => acc + t.durationMinutes, 0) + lmsMinutes)}
                       </td>
                     </tr>
                   </tfoot>

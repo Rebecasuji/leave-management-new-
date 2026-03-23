@@ -6,7 +6,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { pool } from './db';
-import { pmsPool } from './pmsSupabase';
+import { pmsPool, saveSiteReportToPMS } from './pmsSupabase';
 import { getLMSHours } from './lmsSupabase';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -17,7 +17,14 @@ import {
   insertTimeEntrySchema,
   insertDepartmentSchema,
   insertGroupSchema,
+  insertSiteReportSchema,
+  insertSiteReportAttachmentSchema,
 } from "@shared/schema";
+import { createClient } from '@supabase/supabase-js';
+
+const supabaseUrl = process.env.SUPABASE_URL || '';
+const supabaseKey = process.env.SUPABASE_SERVICE_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Store connected WebSocket clients for real-time updates
 const clients: Set<WebSocket> = new Set();
@@ -522,76 +529,61 @@ export async function registerRoutes(
 
       const entry = await storage.createTimeEntry(result.data);
 
-      // Handle PMS Status Synchronization
+      // Handle PMS Status Synchronization & Bottom-Up Aggregation
       try {
         console.log(`[PMS-SYNC] Starting sync. pmsId: ${req.body.pmsId}, pmsSubtaskId: ${req.body.pmsSubtaskId}, progress: ${entryData.percentageComplete}%`);
-        const { updateSubtaskProgress, updateTaskProgress } = await import('./pmsSupabase');
+        const { updateSubtaskProgress, updateTaskProgress, getProjectProgress, getProjects } = await import('./pmsSupabase');
+
+        let targetProjectId: string | null = null;
 
         // CASE 1: Subtask exists - update subtask progress (triggers bottom-up update)
         if (req.body.pmsSubtaskId) {
           console.log(`[PMS-SYNC] Updating subtask ${req.body.pmsSubtaskId} progress`);
           await updateSubtaskProgress(req.body.pmsSubtaskId, entryData.percentageComplete);
+          
+          // Resolve project ID for broadcast
+          const res = await pmsPool.query('SELECT project_id FROM project_tasks pt JOIN subtasks s ON pt.id = s.task_id WHERE s.id = $1::uuid', [req.body.pmsSubtaskId]);
+          if (res.rows && res.rows.length > 0) targetProjectId = res.rows[0].project_id;
         }
         // CASE 2: No subtask - update task progress directly (triggers bottom-up update)
         else if (req.body.pmsId) {
-          console.log(`[PMS-SYNC] Updating task ${req.body.pmsId} progress (no subtask)`);
-          await updateTaskProgress(req.body.pmsId, entryData.percentageComplete);
-        } else {
-          console.log(`[PMS-SYNC] No pmsId or pmsSubtaskId provided. Skipping sync.`);
+          console.log(`[PMS-SYNC] Updating task ${req.body.pmsId} progress (no subtask) using date ${entry.date}`);
+          await updateTaskProgress(req.body.pmsId, entryData.percentageComplete, entry.date);
+          
+          // Resolve project ID for broadcast
+          const res = await pmsPool.query('SELECT project_id FROM project_tasks WHERE id = $1::uuid', [req.body.pmsId]);
+          if (res.rows && res.rows.length > 0) targetProjectId = res.rows[0].project_id;
+        }
+
+        // If we found the project, synchronize points and broadcast
+        if (targetProjectId) {
+          const finalProgress = await getProjectProgress(targetProjectId);
+          console.log(`[PMS-SYNC] Final Project ${targetProjectId} progress: ${finalProgress}%`);
+          
+          // Sync with gamification points (Max 600 points = 100%)
+          // This ensures the AchievementTree grows based on project completion %
+          const targetPoints = Math.round(finalProgress * 6);
+          try {
+            await pool.query(
+              `INSERT INTO project_points (project_id, points, last_active) 
+               VALUES ($1, $2, NOW()) 
+               ON CONFLICT (project_id) DO UPDATE SET points = EXCLUDED.points, last_active = NOW()`,
+              [entry.projectName, targetPoints]
+            );
+          } catch (pErr) { console.error('Failed to sync project points:', pErr); }
+
+          broadcast("project_progress_updated", { 
+            projectId: entry.projectName, 
+            progress: finalProgress,
+            points: targetPoints
+          });
         }
       } catch (pmsSyncError) {
         console.error("[PMS-SYNC] Error during progress synchronization:", pmsSyncError);
-        // We don't fail the request if PMS sync fails, but we log it
-      }
-
-      broadcast("time_entry_created", entry);
-
-      // ============ PMS SYNC ============
-      // If this entry is linked to a PMS task, update progress/status in PMS
-      if (entry.pmsId && entry.percentageComplete !== null) {
-        try {
-          const { updateProjectProgress, updateTaskInPMS, getProjects } = await import('./pmsSupabase');
-
-          console.log(`🔄 Syncing PMS for task ${entry.pmsId}, progress: ${entry.percentageComplete}%`);
-
-          // 1. Update Task Status if 100%
-          if (entry.percentageComplete === 100) {
-            await updateTaskInPMS(entry.pmsId, { status: 'Completed', end_date: entry.date });
-            console.log(`✅ PMS Task ${entry.pmsId} marked as Completed`);
-          }
-
-          // 2. Update Project Progress
-          // We need to find the project first to get its ID/Code. 
-          // storage.createTimeEntry saves `projectName`. We'll try to match it.
-          // Note: This matches by name. Ideally we'd store project_code in time_entries too, 
-          // but for now relying on name match or if we had pmsProjectId.
-          // Let's try to fetch project by name if we can, or just update if we have the code.
-          // Since we don't have project_code in entry, we search.
-
-          // Optimization: If the frontend passed pmsProjectId (not in schema yet), we could use it.
-          // For now, let's look up the project by name.
-          // We can reuse getProjects but that might be heavy. 
-          // Let's just try to update by matching title in the update query (updateProjectProgress supports project_code or id, let's assume valid UUID or Code).
-          // Actually updateProjectProgress query is: WHERE id::text = $2 OR project_code = $2
-          // Using projectName there won't work if it's a name.
-
-          // Let's resolve project_code from name
-          const pmsProjects = await getProjects();
-          const matchedProject = pmsProjects.find(p => p.project_name === entry.projectName);
-
-          if (matchedProject) {
-            await updateProjectProgress(matchedProject.id, entry.percentageComplete);
-            console.log(`✅ PMS Project ${matchedProject.project_name} progress updated to ${entry.percentageComplete}%`);
-          } else {
-            console.warn(`⚠️ Could not find PMS project matching "${entry.projectName}" to update progress.`);
-          }
-
-        } catch (pmsError) {
-          console.error("❌ Failed to sync with PMS:", pmsError);
-          // Don't fail the request, just log
-        }
       }
       // ==================================
+
+      broadcast("time_entry_created", entry);
 
       // NOTE: Email notifications are now sent per day (not per task) via /api/time-entries/submit-daily
       // This prevents multiple emails for multiple tasks submitted on the same day
@@ -828,6 +820,108 @@ export async function registerRoutes(
     }
   });
 
+  // ============ SITE REPORT ROUTES ============
+  app.get("/api/site-reports", async (req, res) => {
+    try {
+      const { employeeId } = req.query;
+      const reports = await storage.getSiteReports(employeeId as string);
+      res.json(reports);
+    } catch (error) {
+      console.error("Get site reports error:", error);
+      res.status(500).json({ error: "Failed to fetch site reports" });
+    }
+  });
+
+  app.get("/api/site-reports/:id", async (req, res) => {
+    try {
+      const report = await storage.getSiteReport(req.params.id);
+      if (!report) return res.status(404).json({ error: "Report not found" });
+      const attachments = await storage.getSiteReportAttachments(req.params.id);
+      res.json({ ...report, attachments });
+    } catch (error) {
+      console.error("Get site report error:", error);
+      res.status(500).json({ error: "Failed to fetch site report" });
+    }
+  });
+
+  app.post("/api/site-reports", async (req, res) => {
+    try {
+      const result = insertSiteReportSchema.safeParse(req.body);
+      if (!result.success) {
+        return res.status(400).json({ error: result.error.errors });
+      }
+
+      const report = await storage.createSiteReport(result.data);
+
+      try {
+        await saveSiteReportToPMS(report);
+      } catch (pmsErr) {
+        console.error("Failed to save site report to PMS:", pmsErr);
+      }
+
+      broadcast("site_report_created", report);
+      res.status(201).json(report);
+    } catch (error) {
+      console.error("Create site report error:", error);
+      res.status(500).json({ error: "Failed to create site report" });
+    }
+  });
+
+  app.patch("/api/site-reports/:id/status", async (req, res) => {
+    try {
+      const { status } = req.body;
+      if (!['pending', 'approved', 'rejected'].includes(status)) {
+        return res.status(400).json({ error: "Invalid status" });
+      }
+      const report = await storage.updateSiteReport(req.params.id, { status });
+      if (!report) return res.status(404).json({ error: "Report not found" });
+      broadcast("site_report_updated", report);
+      res.json(report);
+    } catch (error) {
+      console.error("Update site report status error:", error);
+      res.status(500).json({ error: "Failed to update status" });
+    }
+  });
+
+  app.post("/api/site-reports/upload", async (req, res) => {
+    try {
+      const { reportId, fileName, fileType, base64Data } = req.body;
+      if (!reportId || !fileName || !fileType || !base64Data) {
+        return res.status(400).json({ error: "Missing required fields" });
+      }
+
+      // Convert base64 to buffer
+      const buffer = Buffer.from(base64Data, 'base64');
+      const filePath = `site-reports/${reportId}/${Date.now()}_${fileName}`;
+
+      const { data, error } = await supabase.storage
+        .from('site-reports')
+        .upload(filePath, buffer, {
+          contentType: fileType,
+          upsert: true
+        });
+
+      if (error) throw error;
+
+      const { data: { publicUrl } } = supabase.storage
+        .from('site-reports')
+        .getPublicUrl(filePath);
+
+      const attachment = await storage.createSiteReportAttachment({
+        reportId,
+        fileName,
+        fileType,
+        fileUrl: publicUrl,
+        fileSize: buffer.length,
+      });
+
+      res.status(201).json(attachment);
+    } catch (error) {
+      console.error("Upload site report attachment error:", error);
+      res.status(500).json({ error: "Failed to upload attachment" });
+    }
+  });
+
   app.patch("/api/time-entries/:id/reject", async (req, res) => {
     try {
       const { approvedBy, reason } = req.body;
@@ -978,6 +1072,23 @@ export async function registerRoutes(
       const totalMinutes = allTasks.reduce((acc, t) => acc + parseDurationToMinutes(t.totalHours || "0"), 0);
       const totalHours = formatDuration(totalMinutes);
 
+      let lmsHoursText: string | undefined = undefined;
+      let combinedTotalHours: string = totalHours;
+
+      try {
+        const employee = await storage.getEmployee(employeeId);
+        if (employee) {
+          const lmsData = await getLMSHours(employee.employeeCode, date);
+          if (lmsData && lmsData.totalLMSHours > 0) {
+            lmsHoursText = `${lmsData.totalLMSHours}h`;
+            const combinedMinutes = totalMinutes + Math.round(lmsData.totalLMSHours * 60);
+            combinedTotalHours = formatDuration(combinedMinutes);
+          }
+        }
+      } catch (lmsErr) {
+        console.error('[NOTIFICATION] Failed to fetch LMS hours for email:', lmsErr);
+      }
+
       try {
         const { sendTimesheetSummaryEmail } = await import('./email');
         const emailResult = await sendTimesheetSummaryEmail({
@@ -985,7 +1096,9 @@ export async function registerRoutes(
           employeeName,
           employeeCode,
           date,
-          totalHours,
+          totalHours: combinedTotalHours,
+          taskHours: totalHours,
+          lmsHours: lmsHoursText,
           tasks: allTasks,
           status: 'pending',
         });
@@ -1440,6 +1553,8 @@ export async function registerRoutes(
   app.get('/api/project-points/:projectId', async (req, res) => {
     try {
       const projectId = req.params.projectId;
+      const { getProjectProgress } = await import('./pmsSupabase');
+
       // ensure table exists
       try {
         await pool.query(`
@@ -1450,9 +1565,21 @@ export async function registerRoutes(
           )`);
       } catch (e) { /* ignore */ }
 
+      // SYNC WITH PMS: Fetch real-time progress from hierarchy
+      const progress = await getProjectProgress(projectId);
+      const targetPoints = Math.round(progress * 6);
+
+      // Upsert into local points table
+      await pool.query(
+        `INSERT INTO project_points (project_id, points, last_active) 
+         VALUES ($1, $2, COALESCE((SELECT last_active FROM project_points WHERE project_id = $1), NOW())) 
+         ON CONFLICT (project_id) DO UPDATE SET points = EXCLUDED.points`,
+        [projectId, targetPoints]
+      );
+
       const q = await pool.query('SELECT project_id as "projectId", points, last_active as "lastActive" FROM project_points WHERE project_id = $1', [projectId]);
       if (q.rows && q.rows.length > 0) return res.json(q.rows[0]);
-      return res.json({ projectId, points: 0, lastActive: null });
+      return res.json({ projectId, points: targetPoints, lastActive: null });
     } catch (err) {
       console.error('Get project points error:', err);
       res.status(500).json({ error: 'Failed to fetch project points' });

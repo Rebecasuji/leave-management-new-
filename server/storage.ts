@@ -11,6 +11,8 @@ import {
   tasks,
   subtasks,
   discussions,
+  siteReports,
+  siteReportAttachments,
   // <-- corrected
   type Organisation,
   type InsertOrganisation,
@@ -28,7 +30,11 @@ import {
   type Task,        // <-- keep type
   type Subtask,      // <-- keep type
   type Discussion,
-  type InsertDiscussion
+  type InsertDiscussion,
+  type SiteReport,
+  type InsertSiteReport,
+  type SiteReportAttachment,
+  type InsertSiteReportAttachment,
 } from "@shared/schema";
 import { getProjects as getPMSProjects, getTasks as getPMSTasks, getTasksByProject as getPMSTasksByProject, getSubtasks as getPMSSubtasks, type PMSProject, type PMSTask, type PMSSubtask } from "./pmsSupabase";
 import bcrypt from "bcryptjs";
@@ -113,6 +119,14 @@ export interface IStorage {
   getDiscussionsByEntry(entryId: string): Promise<Discussion[]>;
   getDiscussionsByEmployee(employeeId: string): Promise<Discussion[]>;
   getAllDiscussions(): Promise<Discussion[]>;
+
+  // Site reports
+  getSiteReports(employeeId?: string): Promise<SiteReport[]>;
+  getSiteReport(id: string): Promise<SiteReport | undefined>;
+  createSiteReport(report: InsertSiteReport): Promise<SiteReport>;
+  updateSiteReport(id: string, report: Partial<InsertSiteReport>): Promise<SiteReport | undefined>;
+  getSiteReportAttachments(reportId: string): Promise<SiteReportAttachment[]>;
+  createSiteReportAttachment(attachment: InsertSiteReportAttachment): Promise<SiteReportAttachment>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -647,6 +661,46 @@ export class DatabaseStorage implements IStorage {
   async getAllDiscussions(): Promise<Discussion[]> {
     return await db.select().from(discussions)
       .orderBy(desc(discussions.createdAt));
+  }
+
+  // Site reports
+  async getSiteReports(employeeId?: string): Promise<SiteReport[]> {
+    if (employeeId) {
+      return await db.select().from(siteReports)
+        .where(eq(siteReports.employeeId, employeeId))
+        .orderBy(desc(siteReports.timestamp));
+    }
+    return await db.select().from(siteReports)
+      .orderBy(desc(siteReports.timestamp));
+  }
+
+  async getSiteReport(id: string): Promise<SiteReport | undefined> {
+    const [report] = await db.select().from(siteReports).where(eq(siteReports.id, id));
+    return report;
+  }
+
+  async createSiteReport(report: InsertSiteReport): Promise<SiteReport> {
+    const [newReport] = await db.insert(siteReports).values(report).returning();
+    return newReport;
+  }
+
+  async updateSiteReport(id: string, report: any): Promise<SiteReport | undefined> {
+    const [updated] = await db.update(siteReports)
+      .set(report)
+      .where(eq(siteReports.id, id))
+      .returning();
+    return updated;
+  }
+
+  async getSiteReportAttachments(reportId: string): Promise<SiteReportAttachment[]> {
+    return await db.select().from(siteReportAttachments)
+      .where(eq(siteReportAttachments.reportId, reportId))
+      .orderBy(desc(siteReportAttachments.createdAt));
+  }
+
+  async createSiteReportAttachment(attachment: InsertSiteReportAttachment): Promise<SiteReportAttachment> {
+    const [newAttachment] = await db.insert(siteReportAttachments).values(attachment).returning();
+    return newAttachment;
   }
 }
 

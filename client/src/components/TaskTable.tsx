@@ -38,6 +38,7 @@ export interface Task {
   serverStatus?: 'draft' | 'pending' | 'manager_approved' | 'approved' | 'rejected' | 'resubmitted';
   date?: string;
   rejectionReason?: string;
+  keyStep?: string;
 }
 
 interface TaskTableProps {
@@ -110,6 +111,9 @@ export default function TaskTable({ tasks, onEdit, onDelete, onComplete, onReope
                     <p className="text-white font-medium">{task.title}</p>
                     {task.subTask && (
                       <p className="text-sm text-blue-300">{task.subTask}</p>
+                    )}
+                    {task.keyStep && (
+                      <p className="text-[10px] text-indigo-400 font-bold uppercase mt-0.5">Key Step: {task.keyStep}</p>
                     )}
                     {task.description && (
                       <p className="text-xs text-blue-200/50 truncate max-w-[200px]">

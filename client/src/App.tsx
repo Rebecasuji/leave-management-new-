@@ -20,6 +20,7 @@ import UsersPage from '@/pages/UsersPage';
 import AdminPage from '@/pages/AdminPage';
 import AnalyticsPage from '@/pages/AnalyticsPage';
 import TaskEntryPage from '@/pages/TaskEntryPage';
+import SiteEngineerTimesheet from '@/pages/SiteEngineerTimesheet';
 import RejectionsPage from '@/pages/RejectionsPage';
 import MascotDolls from '@/components/MascotDolls';
 import PostponementsPage from '@/pages/admin/PostponementsPage';
@@ -114,6 +115,9 @@ function AuthenticatedApp() {
               </Route>
               <Route path="/rejections">
                 <RejectionsPage user={user} />
+              </Route>
+              <Route path="/site-timesheet">
+                <SiteEngineerTimesheet />
               </Route>
               <Route path="/discussion">
                 <DiscussionPage />

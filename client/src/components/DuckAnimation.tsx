@@ -8,7 +8,7 @@ export default function DuckAnimation() {
     const ducks = ['🦆', '🐥', '🐥', '🐥', '🐥'];
 
     return (
-        <div className="fixed inset-0 pointer-events-none z-10 overflow-hidden opacity-100 select-none">
+        <div className="fixed inset-0 pointer-events-none z-0 overflow-hidden opacity-100 select-none">
             <motion.div
                 initial={{ x: '-100%' }}
                 animate={{ x: '110%' }}

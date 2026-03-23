@@ -998,7 +998,7 @@ function CornerBuddy({ typing, soundOn, activeBuddyId, onSwitchBuddy, currentUse
                         whileHover={{ scale: 1.05 }}
                         whileTap={{ scale: 0.95 }}
                         className="cursor-pointer select-none relative z-10" 
-                        title={`${activeMember.name} — ${activeMember.dept}`}
+                        title={`${activeMember.name} — Employee`}
                     >
                         <AvatarCard member={activeMember} size={84} wiggle={typing} bounce={bounce} floatAnim={!typing && !bounce} />
                     </motion.div>
@@ -1014,7 +1014,7 @@ function CornerBuddy({ typing, soundOn, activeBuddyId, onSwitchBuddy, currentUse
                     {/* Role Label */}
                     <div className="absolute -bottom-3 right-1/2 translate-x-1/2 whitespace-nowrap px-3 py-1 rounded-full text-[9px] font-black text-white z-20 shadow-2xl skew-x-[-10deg]"
                          style={{ background: activeMember.deptColor, border: '1px solid white/20' }}>
-                        AVATR GUIDE ✨
+                        EMPLOYEE GUIDE ✨
                     </div>
                 </div>
             </div>
@@ -1055,7 +1055,7 @@ function TeamPanel({ onMemberClick }: { onMemberClick: (m: TeamMember) => void }
                             +{TEAM.length - 5}
                         </div>
                     </div>
-                    <span className="text-[10px] font-black text-slate-400 tracking-wider uppercase">Your Office Team</span>
+                    <span className="text-[10px] font-black text-slate-400 tracking-wider uppercase">All Employees</span>
                     <span className="text-[9px] px-2 py-0.5 rounded-full font-black text-violet-300 bg-violet-900/30 border border-violet-800/40">+3 XP per tap</span>
                 </div>
                 <div className="flex items-center gap-2">
@@ -1110,7 +1110,7 @@ function TeamPanel({ onMemberClick }: { onMemberClick: (m: TeamMember) => void }
                             <div className="text-[9px] font-black leading-none"
                                 style={{ color: active === member.id ? member.deptColor : '#94a3b8' }}>{member.name}</div>
                             <div className="text-[7px] mt-0.5 px-1.5 py-0.5 rounded-full font-black leading-none"
-                                style={{ background: `${member.deptColor}20`, color: member.deptColor }}>{member.dept}</div>
+                                style={{ background: `${member.deptColor}20`, color: member.deptColor }}>Employee</div>
                         </div>
                     </button>
                 ))}
@@ -1319,7 +1319,7 @@ export default function TaskEntryPage() {
         addXP((mode === 'add' ? 25 : 15) + (ns >= 3 ? 10 : 0));
         if (ns >= 3) setTimeout(() => spawnScore(`🔥 ${ns}-day streak!`, '#f97316'), 900);
         setIsCelebrating(true);
-        setTimeout(() => setLocation('/tracker'), 4000);
+        setTimeout(() => setLocation(`/tracker?date=${dateStr}`), 4000);
     }, [soundOn, streak, spawnMember, spawnScore, addXP, setLocation]);
 
     const handleSaveTask = async (taskData: any) => {
@@ -1358,7 +1358,7 @@ export default function TaskEntryPage() {
             <FireworkCanvas trigger={firework} />
             {popups.map(d => <MemberPopupEl key={d.id} d={d} />)}
             {scores.map(s => <ScoreFloat key={s.id} s={s} />)}
-            {!id && user?.role === 'employee' && (
+            {!id && user?.role === 'employee' && user?.name?.toLowerCase() !== 'durga devi' && (
                 <CornerBuddy 
                     typing={typing} 
                     soundOn={soundOn} 
@@ -1370,14 +1370,14 @@ export default function TaskEntryPage() {
 
             <div className="min-h-screen bg-slate-950 p-4 md:p-6">
                 <div className="max-w-4xl mx-auto space-y-4">
-                    {user && <FlyInRobot />}
+                    {user && user?.name?.toLowerCase() !== 'durga devi' && <FlyInRobot />}
 
                     {/* HEADER */}
                     <div className="flex items-center justify-between flex-wrap gap-3"
                         style={{ animation: shakeHeader ? 'headerShake .5s cubic-bezier(.36,.07,.19,.97)' : 'none' }}>
                         <div className="flex items-center gap-3">
                             <Button variant="ghost" size="icon"
-                                onClick={() => { if (soundOn) playSound('pop'); setLocation('/tracker'); }}
+                                onClick={() => { if (soundOn) playSound('pop'); setLocation(`/tracker?date=${dateStr}`); }}
                                 className="text-slate-400 hover:text-white hover:bg-slate-800 transition-all hover:scale-110 active:scale-90">
                                 <ChevronLeft className="w-5 h-5" />
                             </Button>
@@ -1403,7 +1403,7 @@ export default function TaskEntryPage() {
 
                     {/* Main animations - show them but balance frequency */}
                     {!id && <DuckAnimation />}
-                    <AchievementCelebration isVisible={isCelebrating} onComplete={() => setLocation('/tracker')} />
+                    <AchievementCelebration isVisible={isCelebrating} onComplete={() => setLocation(`/tracker?date=${dateStr}`)} />
 
                     {/* FORM */}
                     <div className="relative">
@@ -1427,7 +1427,7 @@ export default function TaskEntryPage() {
                                     pmsSubtaskId: editingTask.pmsSubtaskId,
                                 } : undefined}
                                 onSave={handleSaveTask}
-                                onCancel={() => { if (soundOn) playSound('pop'); setLocation('/tracker'); }}
+                                onCancel={() => { if (soundOn) playSound('pop'); setLocation(`/tracker?date=${dateStr}`); }}
                                 user={user ? { role: user.role, employeeCode: user.employeeCode, department: user.department } : undefined}
                             />
                         </div>

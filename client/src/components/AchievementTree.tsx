@@ -11,6 +11,7 @@ const STAGES = [
 ];
 
 import { getProjectDecayStatus } from "../lib/gamification";
+import { useWebSocket } from "../hooks/useWebSocket";
 
 function computeStage(p: number) {
   let s = STAGES[0];
@@ -742,6 +743,18 @@ export default function AchievementTree({ projectId }: { projectId?: string }) {
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
   }, [projectId]);
+  
+  // Real-time synchronization via WebSocket
+  useWebSocket({
+    'project_progress_updated': (data) => {
+      console.log('🌳 Real-time progress update:', data);
+      if (data.projectId === projectId) {
+        setPoints(data.points);
+        // Also update decay status if it was wilting/dying (activity resets decay)
+        setDecayStatus('active');
+      }
+    }
+  });
 
   // recompute stage when points change
   useEffect(() => {

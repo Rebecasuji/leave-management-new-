@@ -264,6 +264,52 @@ export type Manager = typeof managers.$inferSelect;
 /* -------------------------------------------------------------------------- */
 /*                             Dropdown Options                                 */
 /* -------------------------------------------------------------------------- */
+export const siteReports = pgTable("site_reports", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  employeeId: varchar("employee_id").notNull(),
+  employeeName: text("employee_name").notNull(),
+  projectName: text("project_name").notNull(),
+  date: text("date").notNull(),
+  workCategory: text("work_category").notNull(),
+  startTime: text("start_time").notNull(),
+  endTime: text("end_time").notNull(),
+  duration: text("duration").notNull(),
+  workDone: text("work_done").notNull(),
+  issuesFaced: text("issues_faced"),
+  materialsUsed: text("materials_used"),
+  laborCount: integer("labor_count").default(0),
+  locationLat: text("location_lat"),
+  locationLng: text("location_lng"),
+  status: text("status").default("pending").notNull(), // pending, approved, rejected
+  timestamp: timestamp("timestamp").defaultNow().notNull(),
+});
+
+export const siteReportAttachments = pgTable("site_report_attachments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  reportId: varchar("report_id").notNull(),
+  fileName: text("file_name").notNull(),
+  fileType: text("file_type").notNull(),
+  fileUrl: text("file_url").notNull(),
+  fileSize: integer("file_size"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertSiteReportSchema = createInsertSchema(siteReports).omit({
+  id: true,
+  timestamp: true,
+  status: true,
+});
+
+export const insertSiteReportAttachmentSchema = createInsertSchema(siteReportAttachments).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type SiteReport = typeof siteReports.$inferSelect;
+export type InsertSiteReport = z.infer<typeof insertSiteReportSchema>;
+export type SiteReportAttachment = typeof siteReportAttachments.$inferSelect;
+export type InsertSiteReportAttachment = z.infer<typeof insertSiteReportAttachmentSchema>;
+
 export const DEPARTMENT_OPTIONS = [
   "Software",
   "Finance",
@@ -282,3 +328,4 @@ export const PROJECT_OPTIONS = [
   "HRMS Application",
   "PMS Application",
 ] as const;
+

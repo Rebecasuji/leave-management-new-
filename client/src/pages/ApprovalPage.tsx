@@ -11,12 +11,13 @@ import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
-import { Check, X, Search, Filter, RefreshCw, Clock, Loader2, Wrench, Target, Trophy, TrendingUp, AlertCircle, ChevronDown, ChevronUp, FileText, Calendar as CalendarIcon, CheckCircle2, ListFilter, PauseCircle, MessageSquare, Zap } from 'lucide-react';
+import { Check, X, Search, Filter, RefreshCw, Clock, Loader2, Wrench, Target, Trophy, TrendingUp, AlertCircle, ChevronDown, ChevronUp, FileText, Calendar as CalendarIcon, CheckCircle2, ListFilter, PauseCircle, MessageSquare, Zap, HardHat, MapPin, Package, Users, Eye } from 'lucide-react';
 import { User } from '@/context/AuthContext';
 import { useToast } from '@/hooks/use-toast';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import { useWebSocket } from '@/hooks/useWebSocket';
-import type { TimeEntry } from '@shared/schema';
+import type { TimeEntry, SiteReport } from '@shared/schema';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { format, parseISO, startOfDay, endOfDay, isWithinInterval } from 'date-fns';
 
 interface ExtendedTimeEntry extends TimeEntry {
@@ -30,6 +31,7 @@ interface ExtendedTimeEntry extends TimeEntry {
   achievements: string | null;
   quantify: string;
   onHoldReason: string | null;
+  keyStep?: string | null;
   lmsData?: {
     leaveHours: number;
     permissionHours: number;
@@ -103,9 +105,32 @@ export default function ApprovalPage({ user }: { user: User }) {
   const [onHoldReason, setOnHoldReason] = useState('');
   const [onHoldDialogOpen, setOnHoldDialogOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(undefined);
+  const [currentTab, setCurrentTab] = useState('timesheets');
 
   const { data: rawTimeEntries = [], isLoading, refetch } = useQuery<ExtendedTimeEntry[]>({
     queryKey: ['/api/time-entries'],
+  });
+
+  const { data: rawSiteReports = [], isLoading: isSiteReportsLoading, refetch: refetchSiteReports } = useQuery<SiteReport[]>({
+    queryKey: ['/api/site-reports'],
+  });
+
+  const siteReportsCount = useMemo(() => rawSiteReports.filter(r => r.status === 'pending').length, [rawSiteReports]);
+
+  const approveSiteReportMutation = useMutation({
+    mutationFn: async (id: string) => apiRequest('PATCH', `/api/site-reports/${id}/status`, { status: 'approved' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/site-reports'] });
+      toast({ title: "Site Report Approved" });
+    },
+  });
+
+  const rejectSiteReportMutation = useMutation({
+    mutationFn: async (id: string) => apiRequest('PATCH', `/api/site-reports/${id}/status`, { status: 'rejected' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/site-reports'] });
+      toast({ title: "Site Report Rejected", variant: "destructive" });
+    },
   });
 
   const uniqueTimeEntries = useMemo(() => {
@@ -131,9 +156,21 @@ export default function ApprovalPage({ user }: { user: User }) {
     }, { total: 0, pending: 0, manager_approved: 0, approved: 0, rejected: 0, on_hold: 0 });
   }, [uniqueTimeEntries]);
 
+  const siteStats = useMemo(() => {
+    return rawSiteReports.reduce((acc, report) => {
+      acc.total++;
+      if (report.status === 'pending') acc.pending++;
+      else if (report.status === 'approved') acc.approved++;
+      else if (report.status === 'rejected') acc.rejected++;
+      return acc;
+    }, { total: 0, pending: 0, approved: 0, rejected: 0 });
+  }, [rawSiteReports]);
+
   useWebSocket({
     time_entry_created: () => queryClient.invalidateQueries({ queryKey: ['/api/time-entries'] }),
     time_entry_updated: () => queryClient.invalidateQueries({ queryKey: ['/api/time-entries'] }),
+    site_report_created: () => queryClient.invalidateQueries({ queryKey: ['/api/site-reports'] }),
+    site_report_updated: () => queryClient.invalidateQueries({ queryKey: ['/api/site-reports'] }),
   });
 
   const approveMutation = useMutation({
@@ -307,39 +344,64 @@ export default function ApprovalPage({ user }: { user: User }) {
           <p className="text-blue-200/60 text-sm">Review and manage timesheet submissions</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => refetch()} className="bg-slate-800 border-blue-500/20 text-blue-300">
-            <RefreshCw className="w-4 h-4 mr-2" />
+          <Button 
+            variant="outline" 
+            size="sm" 
+            onClick={() => {
+              refetch();
+              refetchSiteReports();
+            }} 
+            className="bg-slate-800 border-blue-500/20 text-blue-300"
+          >
+            <RefreshCw className={`w-4 h-4 mr-2 ${isLoading || isSiteReportsLoading ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
         </div>
       </div>
 
       {/* Stats Summary Card */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        <Card className="bg-slate-800/40 border-blue-500/10 p-3 flex flex-col items-center justify-center text-center">
-          <span className="text-[10px] text-blue-400 font-bold uppercase mb-1">Total</span>
-          <span className="text-xl font-bold text-white">{stats.total}</span>
-        </Card>
-        <Card className="bg-yellow-500/5 border-yellow-500/20 p-3 flex flex-col items-center justify-center text-center">
-          <span className="text-[10px] text-yellow-400 font-bold uppercase mb-1">Pending</span>
-          <span className="text-xl font-bold text-yellow-400">{stats.pending}</span>
-        </Card>
-        <Card className="bg-blue-500/5 border-blue-500/20 p-3 flex flex-col items-center justify-center text-center">
-          <span className="text-[10px] text-blue-400 font-bold uppercase mb-1">Mgr Appr</span>
-          <span className="text-xl font-bold text-blue-400">{stats.manager_approved}</span>
-        </Card>
-        <Card className="bg-green-500/5 border-green-500/20 p-3 flex flex-col items-center justify-center text-center">
-          <span className="text-[10px] text-green-400 font-bold uppercase mb-1">Approved</span>
-          <span className="text-xl font-bold text-green-400">{stats.approved}</span>
-        </Card>
-        <Card className="bg-red-500/5 border-red-500/20 p-3 flex flex-col items-center justify-center text-center">
-          <span className="text-[10px] text-red-400 font-bold uppercase mb-1">Rejected</span>
-          <span className="text-xl font-bold text-red-400">{stats.rejected}</span>
-        </Card>
-        <Card className="bg-orange-500/5 border-orange-500/20 p-3 flex flex-col items-center justify-center text-center">
-          <span className="text-[10px] text-orange-400 font-bold uppercase mb-1">On Hold</span>
-          <span className="text-xl font-bold text-orange-400">{stats.on_hold}</span>
-        </Card>
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <Card className="bg-slate-800/40 border-blue-500/10 p-3 flex flex-col items-center justify-center text-center">
+            <span className="text-[10px] text-blue-400 font-bold uppercase mb-1">Total Timesheets</span>
+            <span className="text-xl font-bold text-white">{stats.total}</span>
+          </Card>
+          <Card className="bg-yellow-500/5 border-yellow-500/20 p-3 flex flex-col items-center justify-center text-center">
+            <span className="text-[10px] text-yellow-400 font-bold uppercase mb-1">Pending</span>
+            <span className="text-xl font-bold text-yellow-400">{stats.pending}</span>
+          </Card>
+          <Card className="bg-blue-500/5 border-blue-500/20 p-3 flex flex-col items-center justify-center text-center">
+            <span className="text-[10px] text-blue-400 font-bold uppercase mb-1">Mgr Appr</span>
+            <span className="text-xl font-bold text-blue-400">{stats.manager_approved}</span>
+          </Card>
+          <Card className="bg-green-500/5 border-green-500/20 p-3 flex flex-col items-center justify-center text-center">
+            <span className="text-[10px] text-green-400 font-bold uppercase mb-1">Approved</span>
+            <span className="text-xl font-bold text-green-400">{stats.approved}</span>
+          </Card>
+          <Card className="bg-orange-500/5 border-orange-500/20 p-3 flex flex-col items-center justify-center text-center">
+            <span className="text-[10px] text-orange-400 font-bold uppercase mb-1">On Hold</span>
+            <span className="text-xl font-bold text-orange-400">{stats.on_hold}</span>
+          </Card>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <Card className="bg-cyan-500/5 border-cyan-500/20 p-3 flex flex-col items-center justify-center text-center">
+            <span className="text-[10px] text-cyan-400 font-bold uppercase mb-1">Total Site Reports</span>
+            <span className="text-xl font-bold text-cyan-400">{siteStats.total}</span>
+          </Card>
+          <Card className="bg-yellow-500/5 border-yellow-500/20 p-3 flex flex-col items-center justify-center text-center">
+            <span className="text-[10px] text-yellow-400 font-bold uppercase mb-1">Site Pending</span>
+            <span className="text-xl font-bold text-yellow-400">{siteStats.pending}</span>
+          </Card>
+          <Card className="bg-green-500/5 border-green-500/20 p-3 flex flex-col items-center justify-center text-center">
+            <span className="text-[10px] text-green-400 font-bold uppercase mb-1">Site Approved</span>
+            <span className="text-xl font-bold text-green-400">{siteStats.approved}</span>
+          </Card>
+          <Card className="bg-red-500/5 border-red-500/20 p-3 flex flex-col items-center justify-center text-center">
+            <span className="text-[10px] text-red-400 font-bold uppercase mb-1">Site Rejected</span>
+            <span className="text-xl font-bold text-red-400">{siteStats.rejected}</span>
+          </Card>
+        </div>
       </div>
 
       {/* Filter Section */}
@@ -455,187 +517,318 @@ export default function ApprovalPage({ user }: { user: User }) {
         </Card>
       )}
 
-      <div className="space-y-3">
-        {filteredSubmissions.length === 0 ? (
-          <div className="text-center py-12 bg-slate-800/20 rounded-lg border border-dashed border-blue-500/20">
-            <AlertCircle className="w-8 h-8 text-blue-500/40 mx-auto mb-2" />
-            <p className="text-blue-200/40">No matching submissions found.</p>
-          </div>
-        ) : (
-          filteredSubmissions.map((entry) => {
-            const parsed = parseTaskDescription(entry.taskDescription, entry);
-            const isExpanded = expandedId === entry.id.toString();
+      <Tabs defaultValue="timesheets" onValueChange={setCurrentTab} className="w-full">
+        <TabsList className="bg-slate-900 border border-blue-500/10 p-1 mb-4 h-11 w-full max-w-md">
+          <TabsTrigger value="timesheets" className="data-[state=active]:bg-blue-600 data-[state=active]:text-white flex-1 text-xs gap-2">
+            <Clock className="w-4 h-4" />
+            Timesheets ({filteredSubmissions.length})
+          </TabsTrigger>
+          <TabsTrigger value="siteReports" className="data-[state=active]:bg-cyan-600 data-[state=active]:text-white flex-1 text-xs gap-2">
+            <HardHat className="w-4 h-4" />
+            Site Reports ({rawSiteReports.filter(r => r.status === 'pending').length})
+          </TabsTrigger>
+        </TabsList>
 
-            return (
-              <Card key={entry.id} className={`bg-slate-800/40 border-blue-500/10 p-4 transition-all hover:bg-slate-800/60 ${selectedIds.has(entry.id.toString()) ? 'border-blue-500/50 bg-blue-500/5' : ''}`}>
-                {/* Header: Checkbox, Name, Status and TIME + COMPLETION */}
-                <div className="flex justify-between items-start mb-3">
-                  <div className="flex gap-3">
-                    {((entry.status || '').toString().toLowerCase() !== 'approved') && ((entry.status || '').toString().toLowerCase() !== 'rejected') && (
-                      <Checkbox
-                        checked={selectedIds.has(entry.id.toString())}
-                        onCheckedChange={() => toggleSelectEntry(entry.id.toString())}
-                        className="mt-2 border-blue-500/30"
-                      />
-                    )}
-                    <div className="w-10 h-10 rounded-full bg-blue-600/20 flex items-center justify-center text-sm text-blue-400 font-bold border border-blue-500/20">
-                      {entry.employeeName.charAt(0)}
-                    </div>
-                    <div>
-                      <h3 className="text-base text-white font-semibold leading-none">{entry.employeeName}</h3>
-                      <p className="text-[10px] text-blue-400/60 mt-1 uppercase font-bold">{entry.employeeCode}</p>
-                      <div className="flex gap-2 mt-2 flex-wrap">
-                        <span className="flex items-center text-xs text-green-400 font-bold bg-green-500/15 px-2 py-1 rounded-md border border-green-500/20">
-                          <CalendarIcon className="w-3 h-3 mr-1.5" /> {format(parseISO(entry.date?.toString() || new Date().toISOString()), 'MMM dd, yyyy')}
-                        </span>
-                        <span className="flex items-center text-xs text-blue-400 font-bold bg-blue-500/15 px-2 py-1 rounded-md border border-blue-500/20">
-                          <Clock className="w-3 h-3 mr-1.5" /> {entry.startTime} - {entry.endTime}
-                        </span>
-                        <span className="flex items-center text-xs text-purple-400 font-bold bg-purple-500/15 px-2 py-1 rounded-md border border-purple-500/20">
-                          <Target className="w-3 h-3 mr-1.5" /> {entry.percentageComplete}% Complete
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                  <Badge className={`uppercase text-[10px] px-2 py-0.5 ${entry.status === 'pending' ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' :
-                    entry.status === 'resubmitted' ? 'bg-orange-500/20 text-orange-400 border-orange-500/50 shadow-[0_0_10px_rgba(249,115,22,0.4)] animate-pulse' :
-                      entry.status === 'approved' ? 'bg-green-500/20 text-green-400 border-green-500/30' :
-                        entry.status === 'manager_approved' ? 'bg-blue-500/20 text-blue-400 border-blue-500/30' :
-                          entry.status === 'on_hold' ? 'bg-orange-500/20 text-orange-400 border-orange-500/30' :
-                            'bg-red-500/20 text-red-400 border-red-500/30'
-                    } border`}>
-                    {entry.status ? entry.status.replace('_', ' ') : 'pending'}
-                  </Badge>
-                </div>
+        <TabsContent value="timesheets">
+          <div className="space-y-3">
+            {filteredSubmissions.length === 0 ? (
+              <div className="text-center py-12 bg-slate-800/20 rounded-lg border border-dashed border-blue-500/20">
+                <AlertCircle className="w-8 h-8 text-blue-500/40 mx-auto mb-2" />
+                <p className="text-blue-200/40">No matching submissions found.</p>
+              </div>
+            ) : (
+              filteredSubmissions.map((entry) => {
+                const parsed = parseTaskDescription(entry.taskDescription, entry);
+                const isExpanded = expandedId === entry.id.toString();
 
-                {/* LMS Hours Summary (if any) */}
-                <LMSHoursDisplay employeeCode={entry.employeeCode} date={entry.date} />
-
-                {/* Projects & Task Brief */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs mb-3">
-                  <div className="bg-slate-900/60 p-2 rounded-lg border border-blue-500/10">
-                    <span className="text-cyan-400 font-bold text-[9px] uppercase block mb-1">Project</span>
-                    <span className="text-white font-medium">{entry.projectName}</span>
-                  </div>
-                  <div className="bg-slate-900/60 p-2 rounded-lg border border-purple-500/10">
-                    <span className="text-purple-400 font-bold text-[9px] uppercase block mb-1">Task</span>
-                    <span className="text-white font-medium">{parsed.task}</span>
-                  </div>
-                  <div className="bg-slate-900/60 p-2 rounded-lg border border-pink-500/10">
-                    <span className="text-pink-400 font-bold text-[9px] uppercase block mb-1">Subtask</span>
-                    <span className="text-white font-medium">{entry.taskDescription.split(' | ')[1] || "N/A"}</span>
-                  </div>
-                </div>
-
-                {/* Expanded Section: Achievements, Problems, and Tools */}
-                {isExpanded && (
-                  <div className="mt-4 pt-4 border-t border-blue-500/10 space-y-4">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <TaskDetailRow label="Quantify Result" value={entry.quantify} icon={Target} colorClass="border-orange-500/10 bg-orange-500/5" />
-                      <TaskDetailRow label="Achievements" value={entry.achievements} icon={Trophy} colorClass="border-green-500/10 bg-green-500/5" />
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <TaskDetailRow label="Problems & Issues" value={entry.problemAndIssues} icon={AlertCircle} colorClass="border-red-500/10 bg-red-500/5" />
-                      <TaskDetailRow label="Scope of Improvements" value={entry.scopeOfImprovements} icon={TrendingUp} colorClass="border-yellow-500/10 bg-yellow-500/5" />
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="bg-cyan-500/5 p-3 rounded-lg border border-cyan-500/10">
-                        <span className="text-cyan-400 font-bold uppercase text-[9px] block mb-2 flex items-center gap-1">
-                          <Wrench className="w-3 h-3" /> Tools Used
-                        </span>
-                        <div className="flex flex-wrap gap-2 mt-1">
-                          {entry.toolsUsed && entry.toolsUsed.length > 0 ? (
-                            entry.toolsUsed.map(t => (
-                              <Badge key={t} variant="outline" className="text-[10px] bg-blue-500/10 border-blue-500/30 text-blue-300 px-2.5 py-0.5">
-                                {t}
-                              </Badge>
-                            ))
-                          ) : (
-                            <span className="text-blue-200/20 text-[10px] italic">No tools recorded</span>
-                          )}
+                return (
+                  <Card key={entry.id} className={`bg-slate-800/40 border-blue-500/10 p-4 transition-all hover:bg-slate-800/60 ${selectedIds.has(entry.id.toString()) ? 'border-blue-500/50 bg-blue-500/5' : ''}`}>
+                    {/* Header: Checkbox, Name, Status and TIME + COMPLETION */}
+                    <div className="flex justify-between items-start mb-3">
+                      <div className="flex gap-3">
+                        {((entry.status || '').toString().toLowerCase() !== 'approved') && ((entry.status || '').toString().toLowerCase() !== 'rejected') && (
+                          <Checkbox
+                            checked={selectedIds.has(entry.id.toString())}
+                            onCheckedChange={() => toggleSelectEntry(entry.id.toString())}
+                            className="mt-2 border-blue-500/30"
+                          />
+                        )}
+                        <div className="w-10 h-10 rounded-full bg-blue-600/20 flex items-center justify-center text-sm text-blue-400 font-bold border border-blue-500/20">
+                          {entry.employeeName.charAt(0)}
                         </div>
-                      </div>
-                      <TaskDetailRow label="Description" value={entry.taskDescription.split(' | ')[2] || parsed.description} icon={FileText} colorClass="border-blue-500/10 bg-blue-500/5" />
-                    </div>
-
-                    {entry.status === 'on_hold' && entry.onHoldReason && (
-                      <div className="bg-orange-500/5 p-3 rounded-lg border border-orange-500/20 flex items-start gap-3">
-                        <AlertCircle className="w-4 h-4 text-orange-400 mt-0.5" />
                         <div>
-                          <span className="text-orange-400 font-bold uppercase text-[9px] block mb-1">On Hold Reason</span>
-                          <p className="text-blue-100/70 text-xs leading-relaxed">{entry.onHoldReason}</p>
+                          <h3 className="text-base text-white font-semibold leading-none">{entry.employeeName}</h3>
+                          <p className="text-[10px] text-blue-400/60 mt-1 uppercase font-bold">{entry.employeeCode}</p>
+                          <div className="flex gap-2 mt-2 flex-wrap">
+                            <span className="flex items-center text-xs text-green-400 font-bold bg-green-500/15 px-2 py-1 rounded-md border border-green-500/20">
+                              <CalendarIcon className="w-3 h-3 mr-1.5" /> {format(parseISO(entry.date?.toString() || new Date().toISOString()), 'MMM dd, yyyy')}
+                            </span>
+                            <span className="flex items-center text-xs text-blue-400 font-bold bg-blue-500/15 px-2 py-1 rounded-md border border-blue-500/20">
+                              <Clock className="w-3 h-3 mr-1.5" /> {entry.startTime} - {entry.endTime}
+                            </span>
+                            <span className="flex items-center text-xs text-purple-400 font-bold bg-purple-500/15 px-2 py-1 rounded-md border border-purple-500/20">
+                              <Target className="w-3 h-3 mr-1.5" /> {entry.percentageComplete}% Complete
+                            </span>
+                          </div>
                         </div>
+                      </div>
+                      <Badge className={`uppercase text-[10px] px-2 py-0.5 ${entry.status === 'pending' ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' :
+                        entry.status === 'resubmitted' ? 'bg-orange-500/20 text-orange-400 border-orange-500/50 shadow-[0_0_10px_rgba(249,115,22,0.4)] animate-pulse' :
+                          entry.status === 'approved' ? 'bg-green-500/20 text-green-400 border-green-500/30' :
+                            entry.status === 'manager_approved' ? 'bg-blue-500/20 text-blue-400 border-blue-500/30' :
+                              entry.status === 'on_hold' ? 'bg-orange-500/20 text-orange-400 border-orange-500/30' :
+                                'bg-red-500/20 text-red-400 border-red-500/30'
+                        } border`}>
+                        {entry.status ? entry.status.replace('_', ' ') : 'pending'}
+                      </Badge>
+                    </div>
+
+                    {/* LMS Hours Summary (if any) */}
+                    <LMSHoursDisplay employeeCode={entry.employeeCode} date={entry.date} />
+
+                    {/* Projects & Task Brief */}
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs mb-3">
+                      <div className="bg-slate-900/60 p-2 rounded-lg border border-blue-500/10">
+                        <span className="text-cyan-400 font-bold text-[9px] uppercase block mb-1">Project</span>
+                        <span className="text-white font-medium">{entry.projectName}</span>
+                      </div>
+                      <div className="bg-slate-900/60 p-2 rounded-lg border border-indigo-500/10">
+                        <span className="text-indigo-400 font-bold text-[9px] uppercase block mb-1">Key Step</span>
+                        <span className="text-white font-medium">{entry.keyStep || "N/A"}</span>
+                      </div>
+                      <div className="bg-slate-900/60 p-2 rounded-lg border border-purple-500/10">
+                        <span className="text-purple-400 font-bold text-[9px] uppercase block mb-1">Task</span>
+                        <span className="text-white font-medium">{parsed.task}</span>
+                      </div>
+                      <div className="bg-slate-900/60 p-2 rounded-lg border border-pink-500/10">
+                        <span className="text-pink-400 font-bold text-[9px] uppercase block mb-1">Subtask</span>
+                        <span className="text-white font-medium">{entry.taskDescription.split(' | ')[1] || "N/A"}</span>
+                      </div>
+                    </div>
+
+                    {/* Expanded Section: Achievements, Problems, and Tools */}
+                    {isExpanded && (
+                      <div className="mt-4 pt-4 border-t border-blue-500/10 space-y-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <TaskDetailRow label="Quantify Result" value={entry.quantify} icon={Target} colorClass="border-orange-500/10 bg-orange-500/5" />
+                          <TaskDetailRow label="Achievements" value={entry.achievements} icon={Trophy} colorClass="border-green-500/10 bg-green-500/5" />
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <TaskDetailRow label="Problems & Issues" value={entry.problemAndIssues} icon={AlertCircle} colorClass="border-red-500/10 bg-red-500/5" />
+                          <TaskDetailRow label="Scope of Improvements" value={entry.scopeOfImprovements} icon={TrendingUp} colorClass="border-yellow-500/10 bg-yellow-500/5" />
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div className="bg-cyan-500/5 p-3 rounded-lg border border-cyan-500/10">
+                            <span className="text-cyan-400 font-bold uppercase text-[9px] block mb-2 flex items-center gap-1">
+                              <Wrench className="w-3 h-3" /> Tools Used
+                            </span>
+                            <div className="flex flex-wrap gap-2 mt-1">
+                              {entry.toolsUsed && entry.toolsUsed.length > 0 ? (
+                                entry.toolsUsed.map(t => (
+                                  <Badge key={t} variant="outline" className="text-[10px] bg-blue-500/10 border-blue-500/30 text-blue-300 px-2.5 py-0.5">
+                                    {t}
+                                  </Badge>
+                                ))
+                              ) : (
+                                <span className="text-blue-200/20 text-[10px] italic">No tools recorded</span>
+                              )}
+                            </div>
+                          </div>
+                          <TaskDetailRow label="Description" value={entry.taskDescription.split(' | ')[2] || parsed.description} icon={FileText} colorClass="border-blue-500/10 bg-blue-500/5" />
+                        </div>
+
+                        {entry.status === 'on_hold' && entry.onHoldReason && (
+                          <div className="bg-orange-500/5 p-3 rounded-lg border border-orange-500/20 flex items-start gap-3">
+                            <AlertCircle className="w-4 h-4 text-orange-400 mt-0.5" />
+                            <div>
+                              <span className="text-orange-400 font-bold uppercase text-[9px] block mb-1">On Hold Reason</span>
+                              <p className="text-blue-100/70 text-xs leading-relaxed">{entry.onHoldReason}</p>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Action Buttons */}
+                    <div className="flex justify-between items-center mt-4 pt-3 border-t border-blue-500/10">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setExpandedId(isExpanded ? null : entry.id.toString())}
+                        className="h-8 text-xs text-blue-400 hover:bg-blue-500/5"
+                      >
+                        {isExpanded ? (
+                          <><ChevronUp className="w-3.5 h-3.5 mr-1.5" /> Hide Details</>
+                        ) : (
+                          <><ChevronDown className="w-3.5 h-3.5 mr-1.5" /> View Details</>
+                        )}
+                      </Button>
+
+                      {entry.status !== 'approved' && entry.status !== 'rejected' && (
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            className="h-8 text-xs px-4 bg-orange-600/20 text-orange-400 border border-orange-500/20 hover:bg-orange-600/30"
+                            onClick={() => { setSelectedEntry(entry); setOnHoldDialogOpen(true); }}
+                          >
+                            <PauseCircle className="w-3.5 h-3.5 mr-1.5" />
+                            On Hold
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            className="h-8 text-xs px-4"
+                            onClick={() => { setSelectedEntry(entry); setRejectDialogOpen(true); }}
+                          >
+                            <X className="w-3.5 h-3.5 mr-1.5" />
+                            Reject
+                          </Button>
+                          <Button
+                            size="sm"
+                            className="h-8 text-xs px-4 bg-blue-600 hover:bg-blue-500"
+                            onClick={() => user.role === 'admin' ? approveMutation.mutate(entry.id.toString()) : managerApproveMutation.mutate(entry.id.toString())}
+                          >
+                            <Check className="w-3.5 h-3.5 mr-1.5" />
+                            Approve
+                          </Button>
+                        </div>
+                      )}
+                      {entry.status === 'on_hold' && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8 text-xs px-4 bg-blue-500/10 border-blue-500/20 text-blue-400 hover:bg-blue-500/20"
+                          onClick={() => {
+                            window.location.href = `/discussion?entryId=${entry.id}`;
+                          }}
+                        >
+                          <MessageSquare className="w-3.5 h-3.5 mr-1.5" />
+                          Discuss
+                        </Button>
+                      )}
+                    </div>
+                  </Card>
+                );
+              })
+            )}
+          </div>
+        </TabsContent>
+
+        <TabsContent value="siteReports">
+          <div className="space-y-4">
+            {rawSiteReports.length === 0 ? (
+              <div className="text-center py-12 bg-slate-800/20 rounded-lg border border-dashed border-cyan-500/20">
+                <HardHat className="w-8 h-8 text-cyan-500/40 mx-auto mb-2" />
+                <p className="text-cyan-200/40">No site reports submitted yet.</p>
+              </div>
+            ) : (
+              rawSiteReports.map((report) => (
+                <Card key={report.id} className="bg-slate-900/60 border-cyan-500/10 p-5 overflow-hidden relative group">
+                  <div className="absolute top-0 right-0 w-24 h-24 bg-cyan-500/5 blur-3xl rounded-full -mr-12 -mt-12 group-hover:bg-cyan-500/10 transition-colors" />
+                  
+                  <div className="flex flex-col md:flex-row justify-between gap-4 relative z-10">
+                    <div className="flex gap-4">
+                      <div className="w-12 h-12 rounded-2xl bg-cyan-500/20 flex flex-col items-center justify-center border border-cyan-500/30">
+                        <span className="text-cyan-400 font-bold text-xs">{format(parseISO(report.date || new Date().toISOString()), 'dd')}</span>
+                        <span className="text-cyan-400/60 text-[8px] uppercase font-bold">{format(parseISO(report.date || new Date().toISOString()), 'MMM')}</span>
+                      </div>
+                      <div>
+                        <h3 className="text-lg text-white font-bold">{report.projectName}</h3>
+                        <div className="flex gap-3 mt-1 items-center">
+                          <span className="text-xs text-blue-400 font-medium flex items-center gap-1.5">
+                            <Clock className="w-3.5 h-3.5" /> {report.startTime} - {report.endTime} ({report.duration})
+                          </span>
+                          <span className="text-xs text-slate-500 font-medium flex items-center gap-1.5">
+                            <Users className="w-3.5 h-3.5" /> {report.laborCount} Workers
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <div className="flex flex-col items-end gap-2">
+                      <Badge className={`uppercase text-[9px] px-2 py-0.5 tracking-wider font-bold ${
+                        report.status === 'pending' ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' :
+                        report.status === 'approved' ? 'bg-green-500/20 text-green-400 border-green-500/30' :
+                        'bg-red-500/20 text-red-400 border-red-500/30'
+                      } border`}>
+                        {report.status}
+                      </Badge>
+                      <p className="text-[10px] text-slate-500">Submitted by: <span className="text-slate-300 font-medium">{report.employeeName}</span></p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mt-6">
+                    <div className="p-3 rounded-xl bg-slate-800/40 border border-slate-700/50">
+                      <span className="text-cyan-400 text-[9px] uppercase font-bold block mb-1.5 flex items-center gap-1">
+                        <Package className="w-3 h-3" /> Work Category
+                      </span>
+                      <p className="text-white text-xs font-semibold">{report.workCategory}</p>
+                    </div>
+                    {report.locationLat && (
+                      <div className="p-3 rounded-xl bg-slate-800/40 border border-slate-700/50">
+                        <span className="text-emerald-400 text-[9px] uppercase font-bold block mb-1.5 flex items-center gap-1">
+                          <MapPin className="w-3 h-3" /> Location
+                        </span>
+                        <p className="text-white text-xs font-semibold truncate">{report.locationLat.substring(0,8)}, {report.locationLng?.substring(0,8)}</p>
+                      </div>
+                    )}
+                    <div className="p-3 rounded-xl bg-slate-800/40 border border-slate-700/50 lg:col-span-2">
+                       <span className="text-blue-400 text-[9px] uppercase font-bold block mb-1.5 flex items-center gap-1">
+                        <FileText className="w-3 h-3" /> Description
+                      </span>
+                      <p className="text-slate-300 text-xs line-clamp-2">{report.workDone}</p>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 pt-4 border-t border-white/5 flex flex-col md:flex-row justify-between gap-4">
+                    <div className="flex gap-2">
+                       <Button 
+                        size="sm" 
+                        variant="ghost" 
+                        className="h-8 text-[10px] text-slate-400 hover:text-white"
+                        onClick={() => {
+                          // TODO: Open detailed site report dialog
+                          toast({ title: "View details coming soon" });
+                        }}
+                      >
+                        <Eye className="w-3.5 h-3.5 mr-2" />
+                        View Full Report
+                      </Button>
+                    </div>
+                    
+                    {report.status === 'pending' && (
+                      <div className="flex gap-2">
+                        <Button 
+                          size="sm" 
+                          variant="destructive" 
+                          className="h-8 text-xs font-bold"
+                          onClick={() => rejectSiteReportMutation.mutate(report.id)}
+                          disabled={rejectSiteReportMutation.isPending}
+                        >
+                          {rejectSiteReportMutation.isPending && <Loader2 className="w-3 h-3 mr-2 animate-spin" />}
+                          Reject
+                        </Button>
+                        <Button 
+                          size="sm" 
+                          className="h-8 text-xs bg-cyan-600 hover:bg-cyan-500 text-white font-bold"
+                          onClick={() => approveSiteReportMutation.mutate(report.id)}
+                          disabled={approveSiteReportMutation.isPending}
+                        >
+                          {approveSiteReportMutation.isPending && <Loader2 className="w-3 h-3 mr-2 animate-spin" />}
+                          Approve Report
+                        </Button>
                       </div>
                     )}
                   </div>
-                )}
-
-                {/* Action Buttons */}
-                <div className="flex justify-between items-center mt-4 pt-3 border-t border-blue-500/10">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setExpandedId(isExpanded ? null : entry.id.toString())}
-                    className="h-8 text-xs text-blue-400 hover:bg-blue-500/5"
-                  >
-                    {isExpanded ? (
-                      <><ChevronUp className="w-3.5 h-3.5 mr-1.5" /> Hide Details</>
-                    ) : (
-                      <><ChevronDown className="w-3.5 h-3.5 mr-1.5" /> View Details</>
-                    )}
-                  </Button>
-
-                  {entry.status !== 'approved' && entry.status !== 'rejected' && (
-                    <div className="flex gap-2">
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        className="h-8 text-xs px-4 bg-orange-600/20 text-orange-400 border border-orange-500/20 hover:bg-orange-600/30"
-                        onClick={() => { setSelectedEntry(entry); setOnHoldDialogOpen(true); }}
-                      >
-                        <PauseCircle className="w-3.5 h-3.5 mr-1.5" />
-                        On Hold
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        className="h-8 text-xs px-4"
-                        onClick={() => { setSelectedEntry(entry); setRejectDialogOpen(true); }}
-                      >
-                        <X className="w-3.5 h-3.5 mr-1.5" />
-                        Reject
-                      </Button>
-                      <Button
-                        size="sm"
-                        className="h-8 text-xs px-4 bg-blue-600 hover:bg-blue-500"
-                        onClick={() => user.role === 'admin' ? approveMutation.mutate(entry.id.toString()) : managerApproveMutation.mutate(entry.id.toString())}
-                      >
-                        <Check className="w-3.5 h-3.5 mr-1.5" />
-                        Approve
-                      </Button>
-                    </div>
-                  )}
-                  {entry.status === 'on_hold' && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-8 text-xs px-4 bg-blue-500/10 border-blue-500/20 text-blue-400 hover:bg-blue-500/20"
-                      onClick={() => {
-                        window.location.href = `/discussion?entryId=${entry.id}`;
-                      }}
-                    >
-                      <MessageSquare className="w-3.5 h-3.5 mr-1.5" />
-                      Discuss
-                    </Button>
-                  )}
-                </div>
-              </Card>
-            );
-          })
-        )}
-      </div>
+                </Card>
+              ))
+            )}
+          </div>
+        </TabsContent>
+      </Tabs>
 
       <Dialog open={rejectDialogOpen} onOpenChange={setRejectDialogOpen}>
         <DialogContent className="bg-slate-900 border-blue-500/20 sm:max-w-md">
