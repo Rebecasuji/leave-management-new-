@@ -35,6 +35,12 @@ import {
   type InsertSiteReport,
   type SiteReportAttachment,
   type InsertSiteReportAttachment,
+  dailyPlans,
+  planTasks,
+  type DailyPlan,
+  type InsertDailyPlan,
+  type PlanTask,
+  type InsertPlanTask,
 } from "@shared/schema";
 import { getProjects as getPMSProjects, getTasks as getPMSTasks, getTasksByProject as getPMSTasksByProject, getSubtasks as getPMSSubtasks, type PMSProject, type PMSTask, type PMSSubtask } from "./pmsSupabase";
 import bcrypt from "bcryptjs";
@@ -69,9 +75,9 @@ export interface IStorage {
   deleteProject(id: string): Promise<boolean>;
 
   // Tasks
-  getTasks(projectId?: string): Promise<Task[]>;
+  getTasks(projectId?: string, userDepartment?: string, userEmpCode?: string, userRole?: string): Promise<Task[]>;
   getTask(id: string): Promise<Task | undefined>;
-  getTasksByProject(projectCode: string): Promise<Task[]>;
+  getTasksByProject(projectCode: string, userDepartment?: string, userEmpCode?: string, userRole?: string): Promise<Task[]>;
   createTask(task: any): Promise<Task>;
   updateTask(id: string, task: Partial<any>): Promise<Task | undefined>;
   deleteTask(id: string): Promise<boolean>;
@@ -127,6 +133,15 @@ export interface IStorage {
   updateSiteReport(id: string, report: Partial<InsertSiteReport>): Promise<SiteReport | undefined>;
   getSiteReportAttachments(reportId: string): Promise<SiteReportAttachment[]>;
   createSiteReportAttachment(attachment: InsertSiteReportAttachment): Promise<SiteReportAttachment>;
+
+  // Daily Plans
+  createDailyPlan(data: InsertDailyPlan): Promise<DailyPlan>;
+  getDailyPlanByDate(employeeId: string, date: string): Promise<DailyPlan | undefined>;
+  createPlanTask(data: InsertPlanTask): Promise<PlanTask>;
+  getPlanTasks(planId: string): Promise<PlanTask[]>;
+  getPlanTasksByEmployeeAndDate(employeeId: string, date: string): Promise<PlanTask[]>;
+  updatePlanTask(id: string, updates: Partial<InsertPlanTask>): Promise<PlanTask | undefined>;
+  getAllDailyPlans(): Promise<DailyPlan[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -246,9 +261,9 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Tasks
-  async getTasks(projectId?: string, userDepartment?: string): Promise<Task[]> {
+  async getTasks(projectId?: string, userDepartment?: string, userEmpCode?: string, userRole?: string): Promise<Task[]> {
     try {
-      const pmsTasks = await getPMSTasks(projectId, userDepartment);
+      const pmsTasks = await getPMSTasks(projectId, userDepartment, userEmpCode, userRole);
       // Map PMS tasks to local Task type
       return pmsTasks.map(pmsTask => ({
         id: pmsTask.id,
@@ -286,9 +301,9 @@ export class DatabaseStorage implements IStorage {
     return (result.rowCount ?? 0) > 0;
   }
 
-  async getTasksByProject(projectCode: string, userDepartment?: string): Promise<Task[]> {
+  async getTasksByProject(projectCode: string, userDepartment?: string, userEmpCode?: string, userRole?: string): Promise<Task[]> {
     try {
-      const pmsTasks = await getPMSTasksByProject(projectCode, userDepartment);
+      const pmsTasks = await getPMSTasksByProject(projectCode, userDepartment, userEmpCode, userRole);
       // Map PMS tasks to local Task type
       return pmsTasks.map(pmsTask => ({
         id: pmsTask.id,
@@ -701,6 +716,43 @@ export class DatabaseStorage implements IStorage {
   async createSiteReportAttachment(attachment: InsertSiteReportAttachment): Promise<SiteReportAttachment> {
     const [newAttachment] = await db.insert(siteReportAttachments).values(attachment).returning();
     return newAttachment;
+  }
+
+  // Daily Plans
+  async createDailyPlan(data: InsertDailyPlan): Promise<DailyPlan> {
+    const [plan] = await db.insert(dailyPlans).values(data).returning();
+    return plan;
+  }
+
+  async getDailyPlanByDate(employeeId: string, date: string): Promise<DailyPlan | undefined> {
+    const [plan] = await db.select().from(dailyPlans).where(
+      and(eq(dailyPlans.employeeId, employeeId), eq(dailyPlans.date, date))
+    );
+    return plan;
+  }
+
+  async createPlanTask(data: InsertPlanTask): Promise<PlanTask> {
+    const [task] = await db.insert(planTasks).values(data).returning();
+    return task;
+  }
+
+  async getPlanTasks(planId: string): Promise<PlanTask[]> {
+    return await db.select().from(planTasks).where(eq(planTasks.planId, planId));
+  }
+
+  async getPlanTasksByEmployeeAndDate(employeeId: string, date: string): Promise<PlanTask[]> {
+    const plan = await this.getDailyPlanByDate(employeeId, date);
+    if (!plan) return [];
+    return await this.getPlanTasks(plan.id);
+  }
+
+  async updatePlanTask(id: string, updates: Partial<InsertPlanTask>): Promise<PlanTask | undefined> {
+    const [updated] = await db.update(planTasks).set(updates).where(eq(planTasks.id, id)).returning();
+    return updated;
+  }
+
+  async getAllDailyPlans(): Promise<DailyPlan[]> {
+    return await db.select().from(dailyPlans).orderBy(desc(dailyPlans.date));
   }
 }
 

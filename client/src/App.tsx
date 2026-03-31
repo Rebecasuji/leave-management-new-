@@ -25,6 +25,7 @@ import RejectionsPage from '@/pages/RejectionsPage';
 import MascotDolls from '@/components/MascotDolls';
 import PostponementsPage from '@/pages/admin/PostponementsPage';
 import DiscussionPage from '@/pages/DiscussionPage';
+import PlanForDayPage from '@/pages/PlanForDayPage';
 import NotFound from '@/pages/not-found';
 import type { TimeEntry } from '@shared/schema';
 
@@ -121,6 +122,9 @@ function AuthenticatedApp() {
               </Route>
               <Route path="/discussion">
                 <DiscussionPage />
+              </Route>
+              <Route path="/plan-for-day">
+                <PlanForDayPage />
               </Route>
               {user.role === 'admin' && (
                 <>

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useLocation, useParams } from 'wouter';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import TaskForm from '@/components/TaskForm';
 import FlyInRobot from '@/components/FlyInRobot';
 import { useToast } from '@/hooks/use-toast';
@@ -13,11 +13,13 @@ import { Button } from '@/components/ui/button';
 import { Task } from '@/components/TaskTable';
 import DuckAnimation from '@/components/DuckAnimation';
 import AchievementCelebration from '@/components/AchievementCelebration';
+import { Dialog, DialogContent } from '@/components/ui/dialog';
+import { AlertCircle } from 'lucide-react';
 
 const getPendingTasksKey = (u: string, d: string) => `pendingTasks_${u}_${d}`;
 
 // ─── SOUND ENGINE ─────────────────────────────────────────────────────────────
-const playSound = (type: 'pop' | 'success' | 'woosh' | 'coin' | 'bounce' | 'magic' | 'levelup' | 'keyboard') => {
+const playSound = (type: 'pop' | 'success' | 'woosh' | 'coin' | 'bounce' | 'magic' | 'levelup' | 'keyboard' | 'restrict') => {
     try {
         const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
         const m = ctx.createGain(); m.gain.value = 0.16; m.connect(ctx.destination);
@@ -38,6 +40,7 @@ const playSound = (type: 'pop' | 'success' | 'woosh' | 'coin' | 'bounce' | 'magi
             case 'success': [523, 659, 784, 1047, 1319].forEach((f, i) => tone(f, 0.22, 'sine', i * 0.09)); break;
             case 'magic': [440, 554, 659, 880, 1108, 1318, 1760].forEach((f, i) => tone(f, 0.22, 'sine', i * 0.065, 0.5)); break;
             case 'levelup': [523, 659, 784, 1047, 784, 1047, 1319].forEach((f, i) => tone(f, 0.18, 'square', i * 0.1)); break;
+            case 'restrict': tone(220, 0.4, 'sawtooth'); tone(200, 0.3, 'sawtooth', 0.1); break;
         }
         setTimeout(() => ctx.close(), 3000);
     } catch (_) { }
@@ -543,11 +546,11 @@ const TEAM = [
         idle: ['Time to log! 🕐', 'Samyuktha says: hurry!', 'Update your entries! 📝'],
     },
     {
-        id: 'sam', name: 'Sam', dept: 'Admin', deptColor: '#6366f1', bgFrom: '#1e1b4b', bgTo: '#3730a3',
-        gender: 'male' as AvatarGender, avatarSeed: 'Sam-anime-boy-blue', bgColor: '#3730a3',
+        id: 'sam', name: 'Sam', dept: 'Management', deptColor: '#f43f5e', bgFrom: '#4c0519', bgTo: '#9f1239',
+        gender: 'male' as AvatarGender, avatarSeed: 'Sam-anime-boy-rose', bgColor: '#9f1239',
         iconKey: 'tech_angel',
-        cheers: ['Admin approved! ✅', 'Sam says well done! 👍', 'Systems are happy!', 'Everything in order!'],
-        idle: ['Server needs your log! 💾', 'Sam is waiting! 🤔', 'Admin portal is open!'],
+        cheers: ['Strategy aligned! 📈', 'Sam leads the way! 👑', 'Goal achieved! ✅', 'Excellence in action!'],
+        idle: ['Sam is planning! 🧠', 'Quarterly review time!', 'Strategic thought...'],
     },
     {
         id: 'durga', name: 'Durga', dept: 'Software', deptColor: '#10b981', bgFrom: '#052e16', bgTo: '#065f46',
@@ -616,9 +619,9 @@ type TeamMember = {
     cheers: string[]; idle: string[];
 };
 
-const DEPT_LIST = ['HR', 'Admin', 'Software', 'Finance', 'Purchase', 'Pre-sales', 'IT Support'];
+const DEPT_LIST = ['Management', 'HR', 'Admin', 'Software', 'Finance', 'Purchase', 'Pre-sales', 'IT Support'];
 const DEPT_COLORS: Record<string, string> = {
-    'HR': '#ec4899', 'Admin': '#6366f1', 'Software': '#10b981',
+    'Management': '#f43f5e', 'HR': '#ec4899', 'Admin': '#6366f1', 'Software': '#10b981',
     'Finance': '#f59e0b', 'Purchase': '#ef4444', 'Pre-sales': '#8b5cf6', 'IT Support': '#0ea5e9'
 };
 const WIN_ADD = ['⏱️ Hours logged!', '✅ Entry saved!', '📋 Sheet updated!', '🎯 Right on time!', '🏆 Great work!', '📊 Data recorded!'];
@@ -1196,12 +1199,36 @@ export default function TaskEntryPage() {
     const [xp, setXp] = useState(() => parseInt(localStorage.getItem('taskXP') || '0'));
     const [streak, setStreak] = useState(() => parseInt(localStorage.getItem('taskStreak') || '0'));
     const [soundOn, setSoundOn] = useState(true);
+
+    // Fetch daily plan status to prevent unauthorized entries
+    const { data: dailyPlanStatus, isLoading: isLoadingPlanStatus } = useQuery({
+        queryKey: ['/api/daily-plans/today', user?.id, dateStr],
+        queryFn: async () => {
+            const res = await fetch(`/api/daily-plans/today/${user?.id}`);
+            if (!res.ok) return { submitted: false };
+            return res.json();
+        },
+        enabled: !!user?.id && dateStr === format(new Date(), 'yyyy-MM-dd'),
+    });
+
+    useEffect(() => {
+        const isToday = dateStr === format(new Date(), 'yyyy-MM-dd');
+        if (isToday && dailyPlanStatus && !dailyPlanStatus.submitted && !isLoadingPlanStatus) {
+            setShowPlanAlert(true);
+            if (soundOn) {
+                // We use a custom 'restrict' tone for professional beep
+                // @ts-ignore
+                playSound('restrict');
+            }
+        }
+    }, [dailyPlanStatus, isLoadingPlanStatus, dateStr, soundOn]);
     const [popups, setPopups] = useState<MemberPopup[]>([]);
     const [scores, setScores] = useState<{ id: number; text: string; x: number; y: number; color: string }[]>([]);
     const [confetti, setConfetti] = useState(false);
     const [firework, setFirework] = useState(0);
     const [typing, setTyping] = useState(false);
     const [activeBuddyId, setActiveBuddyId] = useState(() => resolveUserBuddyId(user));
+    const [showPlanAlert, setShowPlanAlert] = useState(false);
     const [shakeHeader, setShakeHeader] = useState(false);
     const popId = useRef(0);
     const storageKey = user ? getPendingTasksKey(user.id, dateStr) : '';
@@ -1335,10 +1362,10 @@ export default function TaskEntryPage() {
                 const s = localStorage.getItem(storageKey);
                 if (s) { const ts: Task[] = JSON.parse(s); localStorage.setItem(storageKey, JSON.stringify(ts.map(t => t.id === id ? { ...t, ...taskData, durationMinutes: dur } : t))); toast({ title: 'Saved', description: 'Draft updated.' }); triggerWin('edit'); }
             } else {
-                await updateMutation.mutateAsync({ id, data: { projectName: taskData.project, taskDescription: fmtDesc(taskData), problemAndIssues: taskData.problemAndIssues || '', quantify: taskData.quantify || '', achievements: taskData.achievements || '', scopeOfImprovements: taskData.scopeOfImprovements || '', toolsUsed: taskData.toolsUsed || [], startTime: taskData.startTime, endTime: taskData.endTime, totalHours: fmtDur(dur), percentageComplete: taskData.percentageComplete || 0, pmsId: taskData.pmsId, pmsSubtaskId: taskData.pmsSubtaskId } });
+                await updateMutation.mutateAsync({ id, data: { projectName: taskData.project, taskDescription: fmtDesc(taskData), problemAndIssues: taskData.problemAndIssues || '', quantify: taskData.quantify || '', achievements: taskData.achievements || '', scopeOfImprovements: taskData.scopeOfImprovements || '', toolsUsed: taskData.toolsUsed || [], startTime: taskData.startTime, endTime: taskData.endTime, totalHours: fmtDur(dur), percentageComplete: taskData.percentageComplete || 0, pmsId: taskData.pmsId, pmsSubtaskId: taskData.pmsSubtaskId, keyStep: taskData.keyStep } });
             }
         } else {
-            const nt: Task = { id: `local-${Date.now()}`, project: taskData.project, title: taskData.title, subTask: taskData.subTask || '', description: taskData.description, problemAndIssues: taskData.problemAndIssues || '', quantify: taskData.quantify || '', achievements: taskData.achievements || '', scopeOfImprovements: taskData.scopeOfImprovements || '', toolsUsed: taskData.toolsUsed || [], startTime: taskData.startTime, endTime: taskData.endTime, percentageComplete: taskData.percentageComplete || 0, durationMinutes: dur, isComplete: false, pmsId: taskData.pmsId, pmsSubtaskId: taskData.pmsSubtaskId };
+            const nt: Task = { id: `local-${Date.now()}`, project: taskData.project, title: taskData.title, subTask: taskData.subTask || '', description: taskData.description, problemAndIssues: taskData.problemAndIssues || '', quantify: taskData.quantify || '', achievements: taskData.achievements || '', scopeOfImprovements: taskData.scopeOfImprovements || '', toolsUsed: taskData.toolsUsed || [], startTime: taskData.startTime, endTime: taskData.endTime, percentageComplete: taskData.percentageComplete || 0, durationMinutes: dur, isComplete: false, pmsId: taskData.pmsId, pmsSubtaskId: taskData.pmsSubtaskId, keyStep: taskData.keyStep };
             const s = localStorage.getItem(storageKey); const ts = s ? JSON.parse(s) : [];
             localStorage.setItem(storageKey, JSON.stringify([...ts, nt]));
             toast({ title: 'Entry Added', description: 'Added to timesheet.' });
@@ -1442,6 +1469,35 @@ export default function TaskEntryPage() {
                     </div>
                 </div>
             </div>
+            <Dialog open={showPlanAlert} onOpenChange={(open) => {
+                if (!open) setLocation(`/tracker?date=${dateStr}`);
+                setShowPlanAlert(open);
+            }}>
+                <DialogContent className="bg-slate-900/90 backdrop-blur-xl border-blue-500/30 text-white max-w-md p-8 rounded-[2rem] shadow-[0_32px_64px_rgba(0,0,0,0.8)]">
+                    <div className="flex flex-col items-center text-center space-y-6">
+                        <div className="w-20 h-20 rounded-full bg-rose-500/20 flex items-center justify-center border border-rose-500/30 animate-pulse">
+                            <AlertCircle className="w-10 h-10 text-rose-500" />
+                        </div>
+                        <div className="space-y-2">
+                            <h2 className="text-2xl font-black tracking-tight text-white uppercase">Access Restricted</h2>
+                            <p className="text-blue-100/70 text-sm leading-relaxed">
+                                You have not filled your Plan for the Day, so you cannot fill the timesheet.
+                            </p>
+                            <div className="py-2 px-4 bg-white/5 rounded-xl border border-white/10 mt-4">
+                                <p className="text-[11px] font-bold text-blue-300 uppercase tracking-widest leading-loose">
+                                    Please fill your plan of the day
+                                </p>
+                            </div>
+                        </div>
+                        <Button
+                            onClick={() => setLocation(`/tracker?date=${dateStr}`)}
+                            className="w-full bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white font-black py-6 rounded-2xl shadow-xl shadow-blue-900/40 transition-all hover:scale-[1.02] active:scale-95"
+                        >
+                            RETURN TO TRACKER
+                        </Button>
+                    </div>
+                </DialogContent>
+            </Dialog>
         </>
     );
 }

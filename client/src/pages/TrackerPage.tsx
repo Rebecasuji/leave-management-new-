@@ -72,6 +72,7 @@ export default function TrackerPage({ user }: TrackerPageProps) {
   const [submittedTasks, setSubmittedTasks] = useState<Task[]>([]);
   const [showSettingsDialog, setShowSettingsDialog] = useState(false);
   const [blockUnassignedTasks, setBlockUnassignedTasks] = useState(false);
+  const [soundOn, setSoundOn] = useState(true);
   const [projectFilter, setProjectFilter] = useState('');
   const [taskFilter, setTaskFilter] = useState('');
   const [startDateFilter, setStartDateFilter] = useState('');
@@ -132,8 +133,31 @@ export default function TrackerPage({ user }: TrackerPageProps) {
     }
   });
 
+  // Check if daily plan is submitted
+  const { data: dailyPlanStatus } = useQuery({
+    queryKey: ['/api/daily-plans/today', user.id, formattedDate],
+    queryFn: async () => {
+      // Only check for today or past days if relevant, but typically "Plan for the Day" is for "today"
+      const res = await fetch(`/api/daily-plans/today/${user.id}`);
+      if (!res.ok) return { submitted: false };
+      return res.json();
+    },
+    enabled: !!user?.id && formattedDate === format(new Date(), 'yyyy-MM-dd'),
+  });
+
+  const checkPlanAndNavigate = (targetUrl: string) => {
+    const isToday = formattedDate === format(new Date(), 'yyyy-MM-dd');
+    if (isToday && !dailyPlanStatus?.submitted) {
+      setShowPlanAlert(true);
+      if (soundOn) playSound('error');
+      return;
+    }
+    setLocation(targetUrl);
+  };
+
   // Tasks fetched from PMS that are due today but not yet added to timesheet
   const [pendingDeadlineTasks, setPendingDeadlineTasks] = useState<PendingDeadlineTask[]>([]);
+  const [showPlanAlert, setShowPlanAlert] = useState(false);
 
   // Persist pendingTasks to localStorage whenever they change
   const updatePendingTasks = (newTasks: Task[]) => {
@@ -467,7 +491,7 @@ export default function TrackerPage({ user }: TrackerPageProps) {
   };
 
   const handleEditTask = (task: Task) => {
-    setLocation(`/task-entry/${task.id}?date=${formattedDate}`);
+    checkPlanAndNavigate(`/task-entry/${task.id}?date=${formattedDate}`);
   };
 
   const handleResubmitTask = async (task: Task) => {
@@ -516,7 +540,7 @@ export default function TrackerPage({ user }: TrackerPageProps) {
     params.append('pmsTaskName', task.task_name || '');
     params.append('pmsProjectName', task.projectName || '');
     params.append('pmsDescription', task.description || '');
-    setLocation(`/task-entry?${params.toString()}`);
+    checkPlanAndNavigate(`/task-entry?${params.toString()}`);
   };
 
   const handleCompleteTask = (taskId: string) => {
@@ -655,6 +679,7 @@ export default function TrackerPage({ user }: TrackerPageProps) {
           percentageComplete: task.percentageComplete,
           pmsId: task.pmsId,
           pmsSubtaskId: (task as any).pmsSubtaskId,
+          keyStep: task.keyStep,
           status: 'pending',
         });
       }
@@ -1059,7 +1084,7 @@ export default function TrackerPage({ user }: TrackerPageProps) {
               size="sm"
               onClick={() => {
                 const firstRejected = serverEntries.find(e => e.status === 'rejected');
-                if (firstRejected) setLocation(`/task-entry/${firstRejected.id}`);
+                if (firstRejected) checkPlanAndNavigate(`/task-entry/${firstRejected.id}`);
               }}
               className="bg-rose-600 hover:bg-rose-500 text-white font-bold uppercase text-[10px] tracking-widest px-4 h-8 shadow-lg shadow-rose-900/20"
             >
@@ -1072,7 +1097,7 @@ export default function TrackerPage({ user }: TrackerPageProps) {
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <h2 className="text-lg font-semibold text-white">Today's Tasks</h2>
         <Button
-          onClick={() => setLocation(`/task-entry?date=${formattedDate}`)}
+          onClick={() => checkPlanAndNavigate(`/task-entry?date=${formattedDate}`)}
           className="bg-gradient-to-r from-blue-600 to-cyan-600 text-white font-semibold shadow-lg shadow-blue-500/20 hover:shadow-blue-500/40 transition-all"
           data-testid="button-add-task"
         >
@@ -1616,6 +1641,32 @@ export default function TrackerPage({ user }: TrackerPageProps) {
               Close
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={showPlanAlert} onOpenChange={setShowPlanAlert}>
+        <DialogContent className="bg-slate-900/90 backdrop-blur-xl border-blue-500/30 text-white max-w-md p-8 rounded-[2rem] shadow-[0_32px_64px_rgba(0,0,0,0.8)]">
+          <div className="flex flex-col items-center text-center space-y-6">
+            <div className="w-20 h-20 rounded-full bg-rose-500/20 flex items-center justify-center border border-rose-500/30 animate-pulse">
+              <AlertCircle className="w-10 h-10 text-rose-500" />
+            </div>
+            <div className="space-y-2">
+              <h2 className="text-2xl font-black tracking-tight text-white uppercase">Access Restricted</h2>
+              <p className="text-blue-100/70 text-sm leading-relaxed">
+                You have not filled your Plan for the Day, so you cannot fill the timesheet.
+              </p>
+              <div className="py-2 px-4 bg-white/5 rounded-xl border border-white/10 mt-4">
+                <p className="text-[11px] font-bold text-blue-300 uppercase tracking-widest leading-loose">
+                  Please fill your plan of the day
+                </p>
+              </div>
+            </div>
+            <Button 
+              onClick={() => setShowPlanAlert(false)}
+              className="w-full bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white font-black py-6 rounded-2xl shadow-xl shadow-blue-900/40 transition-all hover:scale-[1.02] active:scale-95"
+            >
+              GOT IT
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

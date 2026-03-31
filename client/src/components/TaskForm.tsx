@@ -10,8 +10,19 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { Badge } from '@/components/ui/badge';
 import { Play, Square, Save, Clock, X, Check, Plus, Search } from 'lucide-react';
 import gamification from '@/lib/gamification';
+import { useMutation } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/context/AuthContext';
+import { apiRequest, queryClient } from '@/lib/queryClient';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { AlertCircle, Target, ArrowRight } from "lucide-react";
 
 interface Task {
   id?: string;
@@ -107,6 +118,13 @@ export default function TaskForm({ task, onSave, onCancel, user, saveButtonText 
   const [keySteps, setKeySteps] = useState<{ id: string; name: string }[]>([]);
 
   /* ✅ SAFE FILTER (NO CRASH EVER) */
+  const { toast } = useToast();
+  const [dailyPlan, setDailyPlan] = useState<any>(null);
+  const [isLoadingPlan, setIsLoadingPlan] = useState(true);
+  const [showDeviationDialog, setShowDeviationDialog] = useState(false);
+  const [deviationReason, setDeviationReason] = useState('');
+  const [selectedDeviationTask, setSelectedDeviationTask] = useState<any>(null);
+
   const filteredProjects = Array.isArray(projects)
     ? projects.filter(p =>
       p.project_name?.toLowerCase().includes(projectSearch.toLowerCase())
@@ -178,6 +196,74 @@ export default function TaskForm({ task, onSave, onCancel, user, saveButtonText 
   }, [task]);
 
 
+  useEffect(() => {
+    async function fetchDailyPlan() {
+      if (!authUser?.id) {
+        setIsLoadingPlan(false);
+        return;
+      }
+      try {
+        const res = await fetch(`/api/daily-plans/today/${authUser.id}`);
+        if (res.ok) {
+           const json = await res.json();
+           if (json.submitted) setDailyPlan(json);
+        }
+      } catch (err) {
+        console.error('Failed to fetch daily plan:', err);
+      } finally {
+        setIsLoadingPlan(false);
+      }
+    }
+    fetchDailyPlan();
+  }, [authUser]);
+
+  const sortedTasks = [...(tasks || [])].sort((a, b) => {
+    if (!dailyPlan) return 0;
+    const aPlanned = dailyPlan.tasks.some((pt: any) => pt.taskId === a.id);
+    const bPlanned = dailyPlan.tasks.some((pt: any) => pt.taskId === b.id);
+    if (aPlanned && !bPlanned) return -1;
+    if (!aPlanned && bPlanned) return 1;
+    return 0;
+  });
+
+  const addDeviationMutation = useMutation({
+    mutationFn: async (payload: any) => {
+      const res = await apiRequest('POST', '/api/daily-plans/deviations', payload);
+      return res.json();
+    },
+    onSuccess: (newTask) => {
+       // Refresh plan tasks
+       setDailyPlan((prev: any) => ({ 
+          ...prev, 
+          tasks: [...(prev?.tasks || []), newTask] 
+       }));
+       setShowDeviationDialog(false);
+       setDeviationReason('');
+       setSelectedDeviationTask(null);
+       toast({ title: "Deviation Added", description: "This task is now available for timesheet entry." });
+    },
+    onError: (err: any) => {
+       toast({ title: "Error", description: err.message || "Failed to add deviation", variant: "destructive" });
+    }
+  });
+
+  const handleAddDeviation = () => {
+     if (!selectedDeviationTask || !deviationReason) {
+        toast({ title: "Selection Required", description: "Please select a task and provide a reason.", variant: "destructive" });
+        return;
+     }
+
+     const projectCode = projects.find(p => p.project_name === formData.project)?.project_code;
+
+     addDeviationMutation.mutate({
+        employeeId: authUser?.id,
+        taskId: selectedDeviationTask.id,
+        taskName: selectedDeviationTask.task_name,
+        projectName: formData.project,
+        reason: deviationReason
+     });
+  };
+
   /* ✅ ADDED – fetch tasks when project changes */
   useEffect(() => {
     async function fetchTasks() {
@@ -198,6 +284,7 @@ export default function TaskForm({ task, onSave, onCancel, user, saveButtonText 
         params.append('projectId', selectedProject.project_code);
         if (authUser?.department || user?.department) params.append('userDepartment', authUser?.department || user?.department || '');
         if (authUser?.employeeCode || user?.employeeCode) params.append('userEmpCode', authUser?.employeeCode || user?.employeeCode || '');
+        if (authUser?.role || user?.role) params.append('userRole', authUser?.role || user?.role || '');
 
         const res = await fetch(`/api/tasks?${params.toString()}`);
         const json = await res.json();
@@ -511,7 +598,19 @@ export default function TaskForm({ task, onSave, onCancel, user, saveButtonText 
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="title" className="text-blue-100">Task *</Label>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="title" className="text-blue-100">Task *</Label>
+                {dailyPlan && (
+                   <button 
+                     type="button"
+                     onClick={() => setShowDeviationDialog(true)}
+                     className="text-[10px] text-amber-500 hover:text-amber-400 font-bold uppercase tracking-wider flex items-center gap-1"
+                   >
+                     <Plus className="w-3 h-3" />
+                     Add Deviation
+                   </button>
+                )}
+              </div>
               <Select
                 value={formData.title}
                 onValueChange={(v) => {
@@ -529,16 +628,39 @@ export default function TaskForm({ task, onSave, onCancel, user, saveButtonText 
                 </SelectTrigger>
                 <SelectContent className="max-h-[200px]">
                   {/* Ensure prefilled task is visible even if not in fetched list */}
-                  {formData.title && !tasks.find(t => t.task_name === formData.title) && (
-                    <SelectItem value={formData.title}>{formData.title}</SelectItem>
-                  )}
-                  {tasks.length > 0 ? (
-                    tasks.map(task => (
-                      <SelectItem key={task.id} value={task.task_name}>{task.task_name}</SelectItem>
-                    ))
+                  {dailyPlan ? (
+                    sortedTasks.length > 0 ? (
+                      sortedTasks.map(task => {
+                        const isPlanned = dailyPlan.tasks.some((pt: any) => pt.taskId === task.id);
+                        return (
+                          <SelectItem key={task.id} value={task.task_name} className="flex items-center justify-between gap-4">
+                            <div className="flex items-center gap-2">
+                              {task.task_name}
+                              {isPlanned && (
+                                <Badge variant="outline" className="bg-blue-600/20 text-blue-300 border-blue-500/30 text-[9px] py-0 h-4">
+                                  PLANNED
+                                </Badge>
+                              )}
+                            </div>
+                          </SelectItem>
+                        );
+                      })
+                    ) : (
+                      <div className="py-2 px-8 text-xs text-blue-400/40 italic">
+                        {formData.project ? 'No tasks found for this project' : 'Select a project first'}
+                      </div>
+                    )
                   ) : (
-                    <div className="py-2 px-8 text-xs text-blue-400/40 italic">
-                      {formData.project ? 'No tasks available for this project' : 'Select a project first'}
+                    <div className="py-4 px-8 text-xs text-red-400 font-bold italic text-center">
+                      <p>No Daily Plan submitted for today.</p>
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        className="text-blue-400 mt-2 hover:bg-blue-500/10"
+                        onClick={() => window.location.href = '/plan-for-day'}
+                      >
+                        Submit Plan Now
+                      </Button>
                     </div>
                   )}
                 </SelectContent>
@@ -850,6 +972,65 @@ export default function TaskForm({ task, onSave, onCancel, user, saveButtonText 
             </Button>
           </div>
         </form>
+
+        {/* Deviation Dialog */}
+        <Dialog open={showDeviationDialog} onOpenChange={setShowDeviationDialog}>
+          <DialogContent className="sm:max-w-[500px] bg-slate-900 border-slate-800 text-white p-6 shadow-2xl rounded-3xl">
+            <DialogHeader className="mb-6">
+              <div className="w-12 h-12 bg-amber-500/10 rounded-2xl flex items-center justify-center border border-amber-500/20 mb-4">
+                 <AlertCircle className="w-6 h-6 text-amber-500" />
+              </div>
+              <DialogTitle className="text-2xl font-black">Add Task Deviation</DialogTitle>
+              <DialogDescription className="text-slate-400 font-medium pt-1">
+                This task isn't in your initial plan. Adding it counts as a daily deviation.
+              </DialogDescription>
+            </DialogHeader>
+            
+            <div className="space-y-6 py-2">
+              <div className="space-y-3">
+                <Label className="text-slate-400 font-bold text-xs uppercase tracking-widest">Select Task from PMS *</Label>
+                <Select 
+                  onValueChange={(v) => setSelectedDeviationTask(tasks.find(t => t.id === v))}
+                >
+                  <SelectTrigger className="bg-slate-950 border-slate-800 h-14 rounded-2xl focus:ring-amber-500/30">
+                    <SelectValue placeholder="Search tasks for deviation..." />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-[250px] bg-slate-900 border-slate-800 text-white">
+                     {tasks.filter(t => !dailyPlan?.tasks.some((pt: any) => pt.taskId === t.id)).length > 0 ? (
+                        tasks.filter(t => !dailyPlan?.tasks.some((pt: any) => pt.taskId === t.id)).map(task => (
+                           <SelectItem key={task.id} value={task.id} className="hover:bg-slate-800 focus:bg-slate-800">{task.task_name}</SelectItem>
+                        ))
+                     ) : (
+                        <div className="p-4 text-center text-xs text-slate-500 italic">All available tasks are already in your plan</div>
+                     )}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-3">
+                <Label className="text-slate-400 font-bold text-xs uppercase tracking-widest">Reason for Deviation *</Label>
+                <Textarea 
+                  placeholder="Why are you adding this task today? (Mandatory)"
+                  value={deviationReason}
+                  onChange={(e) => setDeviationReason(e.target.value)}
+                  className="bg-slate-950 border-slate-800 min-h-[120px] rounded-2xl focus:ring-amber-500/30 text-white placeholder:text-slate-600"
+                />
+              </div>
+            </div>
+
+            <DialogFooter className="mt-8 flex gap-3">
+              <Button variant="ghost" className="rounded-xl flex-1 h-12" onClick={() => setShowDeviationDialog(false)}>Cancel</Button>
+              <Button 
+                disabled={addDeviationMutation.isPending || !selectedDeviationTask || !deviationReason}
+                onClick={handleAddDeviation}
+                className="bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white font-black rounded-xl flex-[2] h-12 shadow-lg shadow-amber-900/20"
+              >
+                {addDeviationMutation.isPending ? 'ADDING...' : 'ADD TO PLAN'}
+                <ArrowRight className="w-5 h-5 ml-2" />
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </CardContent>
     </Card>
   );

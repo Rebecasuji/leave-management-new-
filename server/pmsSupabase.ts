@@ -157,7 +157,10 @@ export const getProjects = async (userRole?: string, userEmpCode?: string, userD
     }
 
     // Apply client-side department filtering if user has department (including admins)
-    if (userDepartment) {
+    // ⚡ SPECIAL BYPASS: Admin (specifically E0001) sees ALL projects regardless of department
+    const isAdmin = userRole === 'admin' || userEmpCode === 'E0001';
+    
+    if (userDepartment && !isAdmin) {
       console.log("🔄 Applying client-side department filtering for:", userDepartment);
       const filteredProjects = enrichedProjects.filter(project => {
         // Handle multiple possible department field names and formats
@@ -210,9 +213,10 @@ export const getProjects = async (userRole?: string, userEmpCode?: string, userD
   }
 };
 
-export const getTasks = async (projectId?: string, userDepartment?: string, userEmpCode?: string): Promise<PMSTask[]> => {
+export const getTasks = async (projectId?: string, userDepartment?: string, userEmpCode?: string, userRole?: string): Promise<PMSTask[]> => {
   try {
-    console.log("📡 Executing PMS getTasks query for project:", projectId);
+    console.log("📡 Executing PMS getTasks query for project:", projectId, "userRole:", userRole, "userEmpCode:", userEmpCode);
+    const isAdmin = userRole === 'admin' || userEmpCode === 'E0001';
 
     let query = 'SELECT * FROM project_tasks ORDER BY task_name';
     const params: any[] = [];
@@ -227,11 +231,11 @@ export const getTasks = async (projectId?: string, userDepartment?: string, user
         LEFT JOIN employees e ON tm.employee_id = e.id
         WHERE p.project_code = $1
           AND (pt.status IS NULL OR LOWER(pt.status) != 'completed')
-          AND (LOWER(TRIM(e.emp_code)) = LOWER(TRIM($2)) OR $2 IS NULL)
+          AND (LOWER(TRIM(e.emp_code)) = LOWER(TRIM($2)) OR $2 IS NULL OR $3 = TRUE)
         ORDER BY pt.task_name
       `;
-      params.push(projectId, userEmpCode || null);
-    } else if (userEmpCode) {
+      params.push(projectId, userEmpCode || null, isAdmin);
+    } else if (userEmpCode && !isAdmin) {
       query = `
         SELECT DISTINCT pt.* FROM project_tasks pt
         INNER JOIN task_members tm ON pt.id = tm.task_id
@@ -260,9 +264,10 @@ export const getTasks = async (projectId?: string, userDepartment?: string, user
   }
 };
 
-export const getTasksByProject = async (projectId: string, userDepartment?: string, userEmpCode?: string): Promise<PMSTask[]> => {
+export const getTasksByProject = async (projectId: string, userDepartment?: string, userEmpCode?: string, userRole?: string): Promise<PMSTask[]> => {
   try {
-    console.log("🔍 PMS getTasksByProject called with projectId:", projectId, "userEmpCode:", userEmpCode);
+    console.log("🔍 PMS getTasksByProject called with projectId:", projectId, "userEmpCode:", userEmpCode, "userRole:", userRole);
+    const isAdmin = userRole === 'admin' || userEmpCode === 'E0001';
 
     console.log("📡 Executing PMS getTasksByProject query...");
 
@@ -274,9 +279,9 @@ export const getTasksByProject = async (projectId: string, userDepartment?: stri
        LEFT JOIN employees e ON tm.employee_id = e.id
        WHERE p.project_code = $1
          AND (pt.status IS NULL OR LOWER(pt.status) != 'completed')
-         AND (LOWER(TRIM(e.emp_code)) = LOWER(TRIM($2)) OR $2 IS NULL)
+         AND (LOWER(TRIM(e.emp_code)) = LOWER(TRIM($2)) OR $2 IS NULL OR $3 = TRUE)
        ORDER BY pt.task_name`,
-      [projectId, userEmpCode || null]
+      [projectId, userEmpCode || null, isAdmin]
     );
 
     let tasks = result.rows as PMSTask[] || [];

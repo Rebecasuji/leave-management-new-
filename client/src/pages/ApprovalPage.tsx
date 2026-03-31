@@ -21,17 +21,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { format, parseISO, startOfDay, endOfDay, isWithinInterval } from 'date-fns';
 
 interface ExtendedTimeEntry extends TimeEntry {
-  problemAndIssues: string | null;
-  scopeOfImprovements: string | null;
-  toolsUsed: string[] | null;
-  projectName: string;
-  taskDescription: string;
-  startTime: string;
-  endTime: string;
-  achievements: string | null;
-  quantify: string;
-  onHoldReason: string | null;
-  keyStep?: string | null;
   lmsData?: {
     leaveHours: number;
     permissionHours: number;
@@ -106,6 +95,10 @@ export default function ApprovalPage({ user }: { user: User }) {
   const [onHoldDialogOpen, setOnHoldDialogOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(undefined);
   const [currentTab, setCurrentTab] = useState('timesheets');
+  const [siteReportDetailOpen, setSiteReportDetailOpen] = useState(false);
+  const [siteReportDetail, setSiteReportDetail] = useState<any>(null);
+  const [loadingDetail, setLoadingDetail] = useState(false);
+  const [expandedPlanId, setExpandedPlanId] = useState<string | null>(null);
 
   const { data: rawTimeEntries = [], isLoading, refetch } = useQuery<ExtendedTimeEntry[]>({
     queryKey: ['/api/time-entries'],
@@ -116,6 +109,14 @@ export default function ApprovalPage({ user }: { user: User }) {
   });
 
   const siteReportsCount = useMemo(() => rawSiteReports.filter(r => r.status === 'pending').length, [rawSiteReports]);
+
+  const { data: rawDailyPlans = [], isLoading: isPlansLoading, refetch: refetchPlans } = useQuery<any[]>({
+    queryKey: ['/api/daily-plans/all'],
+  });
+
+  const pendingPlansCount = useMemo(() => 
+    rawDailyPlans.filter(p => p.tasks.some((t: any) => t.isDeviation && t.status === 'pending')).length
+  , [rawDailyPlans]);
 
   const approveSiteReportMutation = useMutation({
     mutationFn: async (id: string) => apiRequest('PATCH', `/api/site-reports/${id}/status`, { status: 'approved' }),
@@ -207,6 +208,15 @@ export default function ApprovalPage({ user }: { user: User }) {
     },
   });
 
+  const updatePlanTaskMutation = useMutation({
+    mutationFn: async ({ taskId, status }: { taskId: string; status: 'approved' | 'rejected' }) => 
+      apiRequest('PATCH', `/api/daily-plans/tasks/${taskId}/status`, { status }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/daily-plans/all'] });
+      toast({ title: "Plan Task Updated" });
+    },
+  });
+
   const bulkApproveMutation = useMutation({
     mutationFn: async (ids: string[]) => {
       await Promise.all(ids.map(id =>
@@ -268,8 +278,8 @@ export default function ApprovalPage({ user }: { user: User }) {
       entries.sort((a, b) => {
         const dateA = a.date ? startOfDay(parseISO(a.date.toString())).getTime() : 0;
         const dateB = b.date ? startOfDay(parseISO(b.date.toString())).getTime() : 0;
-        if (dateA !== dateB) return dateA - dateB;
-        return toMinutes(a.startTime) - toMinutes(b.startTime);
+        if (dateA !== dateB) return dateB - dateA;
+        return toMinutes(b.startTime) - toMinutes(a.startTime);
       });
 
       // find most recent submittedAt for this person
@@ -526,6 +536,10 @@ export default function ApprovalPage({ user }: { user: User }) {
           <TabsTrigger value="siteReports" className="data-[state=active]:bg-cyan-600 data-[state=active]:text-white flex-1 text-xs gap-2">
             <HardHat className="w-4 h-4" />
             Site Reports ({rawSiteReports.filter(r => r.status === 'pending').length})
+          </TabsTrigger>
+          <TabsTrigger value="dailyPlans" className="data-[state=active]:bg-amber-600 data-[state=active]:text-white flex-1 text-xs gap-2">
+            <Target className="w-4 h-4" />
+            Daily Plans ({pendingPlansCount})
           </TabsTrigger>
         </TabsList>
 
@@ -789,9 +803,18 @@ export default function ApprovalPage({ user }: { user: User }) {
                         size="sm" 
                         variant="ghost" 
                         className="h-8 text-[10px] text-slate-400 hover:text-white"
-                        onClick={() => {
-                          // TODO: Open detailed site report dialog
-                          toast({ title: "View details coming soon" });
+                        onClick={async () => {
+                          setLoadingDetail(true);
+                          setSiteReportDetailOpen(true);
+                          try {
+                            const res = await apiRequest('GET', `/api/site-reports/${report.id}`);
+                            const detail = await res.json();
+                            setSiteReportDetail(detail);
+                          } catch (e) {
+                            toast({ title: "Failed to load report", variant: "destructive" });
+                          } finally {
+                            setLoadingDetail(false);
+                          }
                         }}
                       >
                         <Eye className="w-3.5 h-3.5 mr-2" />
@@ -825,6 +848,124 @@ export default function ApprovalPage({ user }: { user: User }) {
                   </div>
                 </Card>
               ))
+            )}
+          </div>
+        </TabsContent>
+
+        <TabsContent value="dailyPlans">
+          <div className="space-y-2">
+            {rawDailyPlans.length === 0 ? (
+              <div className="text-center py-12 bg-slate-800/20 rounded-lg border border-dashed border-amber-500/20">
+                <Target className="w-8 h-8 text-amber-500/40 mx-auto mb-2" />
+                <p className="text-amber-200/40">No daily plans submitted yet.</p>
+              </div>
+            ) : (
+              rawDailyPlans.map((plan: any) => {
+                const isExpanded = expandedPlanId === plan.id;
+                const deviations = (plan.tasks || []).filter((t: any) => t.isDeviation && t.status === 'pending');
+                const postponed = plan.postponedTasks || [];
+
+                return (
+                  <div key={plan.id} className="rounded-2xl border border-amber-500/10 bg-slate-900/60 overflow-hidden">
+                    {/* Summary row – click to expand */}
+                    <button
+                      type="button"
+                      onClick={() => setExpandedPlanId(isExpanded ? null : plan.id)}
+                      className="w-full flex items-center justify-between px-5 py-4 hover:bg-slate-800/40 transition-colors text-left"
+                    >
+                      <div className="flex items-center gap-4">
+                        <div className="w-9 h-9 rounded-full bg-amber-600/20 flex items-center justify-center text-sm text-amber-500 font-bold border border-amber-500/20 shrink-0">
+                          {(plan.employeeName || 'U').charAt(0)}
+                        </div>
+                        <div>
+                          <p className="text-sm font-bold text-white">{plan.employeeName}</p>
+                          <p className="text-[10px] text-amber-400/50 uppercase font-bold tracking-wider">{plan.employeeCode} · {plan.date}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className="flex gap-1.5">
+                          <span className="text-[10px] bg-blue-500/10 text-blue-400 border border-blue-500/20 px-2 py-0.5 rounded-full font-bold">
+                            {(plan.tasks || []).filter((t: any) => !t.isDeviation).length} Tasks
+                          </span>
+                          {deviations.length > 0 && (
+                            <span className="text-[10px] bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2 py-0.5 rounded-full font-bold animate-pulse">
+                              {deviations.length} Dev
+                            </span>
+                          )}
+                          {postponed.length > 0 && (
+                            <span className="text-[10px] bg-orange-500/10 text-orange-400 border border-orange-500/20 px-2 py-0.5 rounded-full font-bold">
+                              {postponed.length} Postponed
+                            </span>
+                          )}
+                        </div>
+                        {isExpanded ? <ChevronUp className="w-4 h-4 text-slate-500" /> : <ChevronDown className="w-4 h-4 text-slate-500" />}
+                      </div>
+                    </button>
+
+                    {/* Expanded area */}
+                    {isExpanded && (
+                      <div className="border-t border-slate-800 px-5 py-4 space-y-4">
+                        {/* Planned Tasks */}
+                        <div>
+                          <p className="text-[10px] text-blue-400 font-black uppercase tracking-widest mb-2">📋 Planned Tasks</p>
+                          <div className="space-y-2">
+                            {(plan.tasks || []).map((task: any) => (
+                              <div key={task.id} className={`flex items-center justify-between p-3 rounded-xl border ${task.isDeviation ? 'bg-amber-500/5 border-amber-500/20' : 'bg-slate-800/30 border-slate-700/40'}`}>
+                                <div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-sm font-bold text-white">{task.taskName}</span>
+                                    {task.isDeviation && <Badge className="bg-amber-500/20 text-amber-400 border-amber-500/30 text-[8px] h-4">Deviation</Badge>}
+                                  </div>
+                                  <p className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">{task.projectName}</p>
+                                  {task.isDeviation && task.deviationReason && (
+                                    <p className="text-xs text-amber-200/60 italic mt-0.5">"{task.deviationReason}"</p>
+                                  )}
+                                </div>
+                                {task.isDeviation && task.status === 'pending' ? (
+                                  <div className="flex gap-1.5 shrink-0 ml-3">
+                                    <Button size="sm" variant="destructive" className="h-7 text-[10px] px-2"
+                                      onClick={() => updatePlanTaskMutation.mutate({ taskId: task.id, status: 'rejected' })}>
+                                      Reject
+                                    </Button>
+                                    <Button size="sm" className="h-7 text-[10px] px-2 bg-green-600 hover:bg-green-500"
+                                      onClick={() => updatePlanTaskMutation.mutate({ taskId: task.id, status: 'approved' })}>
+                                      Approve
+                                    </Button>
+                                  </div>
+                                ) : (
+                                  <Badge className={`uppercase text-[8px] shrink-0 ml-3 ${task.status === 'approved' ? 'bg-green-500/20 text-green-400' : task.status === 'rejected' ? 'bg-red-500/20 text-red-400' : 'bg-slate-800 text-slate-500'}`}>
+                                    {task.status}
+                                  </Badge>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Postponed Tasks */}
+                        {postponed.length > 0 && (
+                          <div>
+                            <p className="text-[10px] text-orange-400 font-black uppercase tracking-widest mb-2">⏭️ Postponed Tasks</p>
+                            <div className="space-y-2">
+                              {postponed.map((pt: any, i: number) => (
+                                <div key={i} className="flex items-start justify-between p-3 rounded-xl border bg-orange-500/5 border-orange-500/20">
+                                  <div>
+                                    <span className="text-sm font-bold text-white">{pt.task_name}</span>
+                                    <p className="text-xs text-orange-200/60 italic mt-0.5">"{pt.reason}"</p>
+                                  </div>
+                                  <span className="text-[10px] bg-orange-500/10 text-orange-400 border border-orange-500/20 px-2 py-0.5 rounded-full font-bold shrink-0 ml-3">
+                                    Due: {pt.new_due_date}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })
             )}
           </div>
         </TabsContent>
@@ -898,6 +1039,192 @@ export default function ApprovalPage({ user }: { user: User }) {
               Confirm On Hold
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Site Report Full Detail Dialog */}
+      <Dialog open={siteReportDetailOpen} onOpenChange={(open) => { setSiteReportDetailOpen(open); if (!open) setSiteReportDetail(null); }}>
+        <DialogContent className="bg-slate-900 border-white/10 sm:max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="text-white text-xl flex items-center gap-2">
+              <FileText className="w-5 h-5 text-cyan-400" />
+              Site Report Details
+            </DialogTitle>
+            <DialogDescription className="text-slate-400 text-sm">
+              Full details of the submitted site report
+            </DialogDescription>
+          </DialogHeader>
+
+          {loadingDetail ? (
+            <div className="flex items-center justify-center py-20">
+              <Loader2 className="w-8 h-8 animate-spin text-cyan-400" />
+            </div>
+          ) : siteReportDetail ? (
+            <div className="space-y-6">
+              {/* Header Info */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div className="p-3 rounded-xl bg-slate-800/60 border border-slate-700/50">
+                  <span className="text-[9px] uppercase font-bold text-cyan-400 block mb-1">Project</span>
+                  <p className="text-white text-sm font-semibold">{siteReportDetail.projectName}</p>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-800/60 border border-slate-700/50">
+                  <span className="text-[9px] uppercase font-bold text-blue-400 block mb-1">Date</span>
+                  <p className="text-white text-sm font-semibold">{siteReportDetail.date}</p>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-800/60 border border-slate-700/50">
+                  <span className="text-[9px] uppercase font-bold text-emerald-400 block mb-1">Category</span>
+                  <p className="text-white text-sm font-semibold">{siteReportDetail.workCategory}</p>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-800/60 border border-slate-700/50">
+                  <span className="text-[9px] uppercase font-bold text-violet-400 block mb-1">Submitted By</span>
+                  <p className="text-white text-sm font-semibold">{siteReportDetail.employeeName}</p>
+                </div>
+              </div>
+
+              {/* Working Hours */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-500/20">
+                  <span className="text-[9px] uppercase font-bold text-blue-400 block mb-1"><Clock className="w-3 h-3 inline mr-1" />Start Time</span>
+                  <p className="text-white text-sm font-bold">{siteReportDetail.startTime || 'N/A'}</p>
+                </div>
+                <div className="p-3 rounded-xl bg-indigo-500/10 border border-indigo-500/20">
+                  <span className="text-[9px] uppercase font-bold text-indigo-400 block mb-1"><Clock className="w-3 h-3 inline mr-1" />End Time</span>
+                  <p className="text-white text-sm font-bold">{siteReportDetail.endTime || 'N/A'}</p>
+                </div>
+                <div className="p-3 rounded-xl bg-cyan-500/10 border border-cyan-500/20">
+                  <span className="text-[9px] uppercase font-bold text-cyan-400 block mb-1"><Clock className="w-3 h-3 inline mr-1" />Duration</span>
+                  <p className="text-white text-sm font-bold">{siteReportDetail.duration || 'N/A'}</p>
+                </div>
+              </div>
+
+              {/* Work Done */}
+              <div className="p-4 rounded-xl bg-slate-800/40 border border-white/5">
+                <h4 className="text-sm font-bold text-white mb-2 flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-blue-400" /> Work Done / Notes
+                </h4>
+                <p className="text-slate-300 text-sm leading-relaxed whitespace-pre-wrap">{siteReportDetail.workDone || 'No notes provided.'}</p>
+              </div>
+
+              {/* Sqft & Materials side by side */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {siteReportDetail.sqftCovered && (
+                  <div className="p-4 rounded-xl bg-orange-500/10 border border-orange-500/20">
+                    <h4 className="text-sm font-bold text-orange-400 mb-2 flex items-center gap-2">
+                      <Target className="w-4 h-4" /> Work Output (Sqft)
+                    </h4>
+                    <p className="text-white text-sm">{siteReportDetail.sqftCovered}</p>
+                  </div>
+                )}
+                {siteReportDetail.materialsUsed && (
+                  <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
+                    <h4 className="text-sm font-bold text-emerald-400 mb-2 flex items-center gap-2">
+                      <Package className="w-4 h-4" /> Materials Used
+                    </h4>
+                    <p className="text-slate-300 text-sm whitespace-pre-wrap">{siteReportDetail.materialsUsed}</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Issues */}
+              {siteReportDetail.issuesFaced && (
+                <div className="p-4 rounded-xl bg-red-500/10 border border-red-500/20">
+                  <h4 className="text-sm font-bold text-red-400 mb-2 flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4" /> Issues Faced
+                  </h4>
+                  <p className="text-slate-300 text-sm whitespace-pre-wrap">{siteReportDetail.issuesFaced}</p>
+                </div>
+              )}
+
+              {/* Labour Log */}
+              {siteReportDetail.laborData && JSON.parse(typeof siteReportDetail.laborData === 'string' ? siteReportDetail.laborData : JSON.stringify(siteReportDetail.laborData)).length > 0 && (
+                <div className="p-4 rounded-xl bg-violet-500/10 border border-violet-500/20">
+                  <h4 className="text-sm font-bold text-violet-400 mb-3 flex items-center gap-2">
+                    <Users className="w-4 h-4" /> Labour Attendance Log
+                    <Badge className="bg-violet-500/20 text-violet-300 border-violet-500/30 text-[10px] px-2">
+                      {(JSON.parse(typeof siteReportDetail.laborData === 'string' ? siteReportDetail.laborData : JSON.stringify(siteReportDetail.laborData))).length} workers
+                    </Badge>
+                  </h4>
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 px-3 py-1 text-[9px] uppercase text-slate-500 font-bold">
+                      <span className="w-6">#</span>
+                      <span className="flex-[3]">Name</span>
+                      <span className="flex-1 text-center">In</span>
+                      <span className="flex-1 text-center">Out</span>
+                    </div>
+                    {(JSON.parse(typeof siteReportDetail.laborData === 'string' ? siteReportDetail.laborData : JSON.stringify(siteReportDetail.laborData))).map((l: any, i: number) => (
+                      <div key={i} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-800/40 border border-white/5">
+                        <span className="w-6 text-[10px] text-slate-500 font-mono">{i + 1}</span>
+                        <span className="flex-[3] text-sm text-white">{l.name || 'Anonymous'}</span>
+                        <span className="flex-1 text-center text-xs text-slate-300 font-mono">{l.inTime || '--:--'}</span>
+                        <span className="flex-1 text-center text-xs text-slate-300 font-mono">{l.outTime || '--:--'}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* GPS Location */}
+              {siteReportDetail.locationLat && siteReportDetail.locationLng && (
+                <div className="p-4 rounded-xl bg-slate-800/40 border border-white/5">
+                  <h4 className="text-sm font-bold text-orange-400 mb-3 flex items-center gap-2">
+                    <MapPin className="w-4 h-4" /> GPS Location
+                    <span className="text-xs text-slate-400 font-normal">{siteReportDetail.locationLat}, {siteReportDetail.locationLng}</span>
+                  </h4>
+                  <div className="w-full h-[200px] rounded-xl overflow-hidden border border-white/10">
+                    <iframe
+                      width="100%"
+                      height="100%"
+                      frameBorder="0"
+                      scrolling="no"
+                      src={`https://www.openstreetmap.org/export/embed.html?bbox=${parseFloat(siteReportDetail.locationLng)-0.005}%2C${parseFloat(siteReportDetail.locationLat)-0.005}%2C${parseFloat(siteReportDetail.locationLng)+0.005}%2C${parseFloat(siteReportDetail.locationLat)+0.005}&layer=mapnik&marker=${siteReportDetail.locationLat}%2C${siteReportDetail.locationLng}`}
+                      style={{ filter: 'invert(90%) hue-rotate(180deg) brightness(95%) contrast(90%)' }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Attachments / Photos */}
+              {siteReportDetail.attachments && siteReportDetail.attachments.length > 0 && (
+                <div className="p-4 rounded-xl bg-indigo-500/10 border border-indigo-500/20">
+                  <h4 className="text-sm font-bold text-indigo-400 mb-3 flex items-center gap-2">
+                    <Eye className="w-4 h-4" /> Site Evidence Photos
+                    <Badge className="bg-indigo-500/20 text-indigo-300 border-indigo-500/30 text-[10px] px-2">
+                      {siteReportDetail.attachments.length}
+                    </Badge>
+                  </h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {siteReportDetail.attachments.map((att: any, i: number) => (
+                      <div key={i} className="rounded-xl overflow-hidden border border-white/10 bg-slate-800/40">
+                        {(att.fileType?.startsWith('image/') || att.fileUrl?.startsWith('data:image/')) ? (
+                          <img src={att.fileUrl} alt={att.fileName} className="w-full h-48 object-cover" />
+                        ) : (
+                          <div className="w-full h-32 flex items-center justify-center bg-slate-800">
+                            <FileText className="w-10 h-10 text-slate-500" />
+                          </div>
+                        )}
+                        <div className="p-2">
+                          <p className="text-xs text-slate-300 truncate">{att.fileName}</p>
+                          <p className="text-[10px] text-slate-500 uppercase">{att.fileType?.split('/')[1] || 'file'}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Status */}
+              <div className="flex items-center justify-between p-3 rounded-xl bg-slate-800/40 border border-white/5">
+                <span className="text-xs text-slate-400">Report Status</span>
+                <Badge className={`uppercase text-[10px] px-3 py-1 font-bold ${
+                  siteReportDetail.status === 'pending' ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' :
+                  siteReportDetail.status === 'approved' ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' :
+                  'bg-red-500/20 text-red-400 border-red-500/30'
+                } border`}>
+                  {siteReportDetail.status}
+                </Badge>
+              </div>
+            </div>
+          ) : null}
         </DialogContent>
       </Dialog>
     </div>

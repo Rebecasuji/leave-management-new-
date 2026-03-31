@@ -19,6 +19,8 @@ import {
   insertGroupSchema,
   insertSiteReportSchema,
   insertSiteReportAttachmentSchema,
+  dailyPlans,
+  planTasks,
 } from "@shared/schema";
 import { createClient } from '@supabase/supabase-js';
 
@@ -83,7 +85,7 @@ async function enrichEntry(e: any) {
   } catch (err) {
     console.error('[PMS-ENRICH] failed to resolve key step for entry', e.id, err);
   }
-  return { ...e, keyStep: keyStepName, pmsStartDate, pmsEndDate };
+  return { ...e, keyStep: e.keyStep || keyStepName, pmsStartDate, pmsEndDate };
 }
 
 export async function registerRoutes(
@@ -364,8 +366,13 @@ export async function registerRoutes(
   // ============ TASKS ROUTES ============
   app.get("/api/tasks", async (req, res) => {
     try {
-      const { projectId, userDepartment } = req.query;
-      const tasks = await storage.getTasks(projectId as string, userDepartment as string);
+      const { projectId, userDepartment, userEmpCode, userRole } = req.query;
+      const tasks = await storage.getTasks(
+        projectId as string, 
+        userDepartment as string, 
+        userEmpCode as string, 
+        userRole as string
+      );
       res.json(tasks);
     } catch (error) {
       console.error("Get tasks error:", error);
@@ -519,12 +526,27 @@ export async function registerRoutes(
         percentageComplete: parseInt(req.body.percentageComplete) || 0,
         pmsId: req.body.pmsId || null,
         pmsSubtaskId: req.body.pmsSubtaskId || null,
+        keyStep: req.body.keyStep || null,
       };
 
       const result = insertTimeEntrySchema.safeParse(entryData);
       if (!result.success) {
         console.error("[TIME-ENTRY] Validation error:", result.error);
         return res.status(400).json({ error: result.error });
+      }
+
+      // Plan for the Day Check
+      const plan = await storage.getDailyPlanByDate(entryData.employeeId, entryData.date);
+      if (!plan) {
+         return res.status(403).json({ error: "You must submit your 'Plan for the Day' before filling timesheets." });
+      }
+
+      // Check if task exists in the plan
+      const planTasks = await storage.getPlanTasks(plan.id);
+      const isPlanned = planTasks.some(pt => pt.taskId === entryData.pmsId || pt.taskId === entryData.pmsSubtaskId);
+      
+      if (!isPlanned && (entryData.pmsId || entryData.pmsSubtaskId)) {
+         return res.status(403).json({ error: "This task is not part of today's plan. Please add it as a deviation first." });
       }
 
       const entry = await storage.createTimeEntry(result.data);
@@ -864,6 +886,72 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Create site report error:", error);
       res.status(500).json({ error: "Failed to create site report" });
+    }
+  });
+
+  // Upload attachment for site report (stores base64 data)
+  app.post("/api/site-reports/upload", async (req, res) => {
+    try {
+      const { reportId, fileName, fileType, base64Data } = req.body;
+      if (!reportId || !fileName || !fileType || !base64Data) {
+        return res.status(400).json({ error: "Missing required fields: reportId, fileName, fileType, base64Data" });
+      }
+
+      // Store as data URI so it can be embedded in emails
+      const fileUrl = `data:${fileType};base64,${base64Data}`;
+
+      const attachment = await storage.createSiteReportAttachment({
+        reportId,
+        fileName,
+        fileType,
+        fileUrl,
+        fileSize: Math.round(base64Data.length * 0.75), // approximate decoded size
+      });
+
+      res.status(201).json(attachment);
+    } catch (error) {
+      console.error("Upload attachment error:", error);
+      res.status(500).json({ error: "Failed to upload attachment" });
+    }
+  });
+
+  app.post("/api/site-reports/:id/send-email", async (req, res) => {
+    try {
+      const reportId = req.params.id;
+      const report = await storage.getSiteReport(reportId);
+      if (!report) return res.status(404).json({ error: "Report not found" });
+
+      const attachments = await storage.getSiteReportAttachments(reportId);
+      const { sendSiteReportEmail } = await import('./email');
+
+      const emailResult = await sendSiteReportEmail({
+        employeeName: report.employeeName,
+        projectName: report.projectName,
+        date: report.date,
+        workCategory: report.workCategory,
+        startTime: report.startTime,
+        endTime: report.endTime,
+        duration: report.duration,
+        workDone: report.workDone,
+        issuesFaced: report.issuesFaced || undefined,
+        materialsUsed: report.materialsUsed || undefined,
+        laborCount: report.laborCount || 0,
+        laborDetails: (report as any).laborDetails || undefined,
+        sqftCovered: (report as any).sqftCovered || undefined,
+        laborData: (report as any).laborData || undefined,
+        location: report.locationLat && report.locationLng ? { lat: report.locationLat, lng: report.locationLng } : undefined,
+        attachments: attachments.map(a => ({ fileName: a.fileName, fileUrl: a.fileUrl, fileType: a.fileType })),
+        recipients: (report as any).emailRecipients ? (report as any).emailRecipients.split(',').map((s: string) => s.trim()).filter(Boolean) : [],
+      });
+
+      if (!emailResult.success) {
+        return res.status(500).json({ error: "Failed to send email", details: emailResult.error });
+      }
+
+      res.json({ success: true, message: "Professional report emailed successfully" });
+    } catch (error) {
+      console.error("Send site report email error:", error);
+      res.status(500).json({ error: "Failed to send site report email" });
     }
   });
 
@@ -1455,6 +1543,268 @@ export async function registerRoutes(
     }
   });
 
+  // ============ DAILY PLAN ROUTES ============
+  app.get("/api/daily-plans/today/:employeeId", async (req, res) => {
+    try {
+      const { employeeId } = req.params;
+      const date = new Date().toISOString().split('T')[0];
+      const plan = await storage.getDailyPlanByDate(employeeId, date);
+      
+      if (!plan) {
+        return res.json({ submitted: false });
+      }
+
+      const tasks = await storage.getPlanTasks(plan.id);
+      res.json({ submitted: true, plan, tasks });
+    } catch (error) {
+      console.error("Get today's plan error:", error);
+      res.status(500).json({ error: "Failed to fetch today's plan" });
+    }
+  });
+
+  app.get("/api/daily-plans/:date/:employeeId", async (req, res) => {
+    try {
+      const { date, employeeId } = req.params;
+      const plan = await storage.getDailyPlanByDate(employeeId, date);
+      
+      if (!plan) {
+        return res.json({ submitted: false });
+      }
+
+      const tasks = await storage.getPlanTasks(plan.id);
+      // Fetch postponements for this employee on this specific date
+      const postponements = await pool.query(
+        `SELECT task_name, reason, new_due_date FROM task_postponements WHERE postponed_by = $1 AND DATE(postponed_at) = $2::date`,
+        [employeeId, date]
+      );
+      
+      res.json({ 
+        submitted: true, 
+        plan, 
+        tasks, 
+        postponedTasks: postponements.rows || [] 
+      });
+    } catch (error) {
+      console.error("Get plan by date error:", error);
+      res.status(500).json({ error: "Failed to fetch plan for this date" });
+    }
+  });
+
+  // ---- Plan Window Control (E0046 only) ----
+  app.get("/api/plan-window", async (_req, res) => {
+    const settings = await readSettings();
+    res.json({ planWindowOpen: !!settings.planWindowOpen });
+  });
+
+  app.patch("/api/plan-window", async (req, res) => {
+    try {
+      const { employeeId, open } = req.body;
+      const employee = await storage.getEmployee(employeeId);
+      if (employee?.employeeCode !== 'E0046') {
+        return res.status(403).json({ error: "Only E0046 can control the plan window." });
+      }
+      const settings = await readSettings();
+      settings.planWindowOpen = !!open;
+      await writeSettings(settings);
+      broadcast("plan_window_changed", { planWindowOpen: !!open, changedBy: employee.name });
+      res.json({ planWindowOpen: !!open });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to update plan window." });
+    }
+  });
+  // ---- End Plan Window Control ----
+
+  app.post("/api/daily-plans", async (req, res) => {
+    try {
+      const { employeeId, date, selectedTasks, unselectedTasks } = req.body;
+
+      const now = new Date();
+      // Plan window is always open unless explicitly restricted by other future logic
+      // Removing the 9:00 AM - 12:00 PM restriction as requested
+      const isInTimeWindow = true; 
+
+      const planDate = date || now.toISOString().split('T')[0];
+      let plan;
+      const existingPlan = await storage.getDailyPlanByDate(employeeId, planDate);
+      
+      if (existingPlan) {
+        // If plan exists, we'll "re-submit" it by clearing tasks and starting over
+        // This is only allowed if the window is forced open or during the 9-12 AM window
+        plan = existingPlan;
+        // Delete existing tasks for this plan
+        await pool.query('DELETE FROM plan_tasks WHERE plan_id = $1', [plan.id]);
+      } else {
+        plan = await storage.createDailyPlan({ employeeId, date: planDate });
+      }
+
+      // Save selected tasks
+      for (const t of selectedTasks) {
+        await storage.createPlanTask({
+          planId: plan.id,
+          taskId: t.id,
+          projectName: t.projectName || t.project_code,
+          taskName: t.task_name,
+          isDeviation: false,
+          status: 'approved'
+        });
+      }
+
+      // Save unselected tasks as postponements
+      for (const t of unselectedTasks) {
+         await pool.query(
+            `INSERT INTO task_postponements (task_id, task_name, reason, previous_due_date, new_due_date, postponed_by, postponed_at) 
+             VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
+            [t.taskId, t.taskName, t.reason, null, t.newDueDate, employeeId]
+         );
+      }
+
+      broadcast("daily_plan_submitted", { plan, employeeId });
+
+      // Email notification to admin
+      try {
+        const { sendDailyPlanSubmittedEmail } = await import('./email');
+        const emp = await storage.getEmployee(employeeId);
+        await sendDailyPlanSubmittedEmail({
+          employeeName: emp?.name || 'Employee',
+          employeeCode: emp?.employeeCode || employeeId,
+          selectedTasks: selectedTasks,
+          unselectedTasks: unselectedTasks || []
+        });
+      } catch (emailErr) {
+        console.error('[EMAIL] Daily plan notification failed:', emailErr);
+      }
+
+      res.status(201).json(plan);
+    } catch (error) {
+      console.error("Create daily plan error:", error);
+      res.status(500).json({ error: "Failed to create daily plan" });
+    }
+  });
+
+  app.post("/api/daily-plans/reminder", async (req, res) => {
+    try {
+      const { employeeId } = req.body;
+      const actor = await storage.getEmployee(employeeId);
+      
+      // Access Restricted: Only E0046 and E0048 can send reminders
+      if (!actor || (actor.employeeCode !== 'E0046' && actor.employeeCode !== 'E0048')) {
+        return res.status(403).json({ error: "Unauthorized. Access limited to E0046 and E0048." });
+      }
+
+      const allEmployees = await storage.getEmployees();
+      const recipients = allEmployees.filter(e => e.isActive && e.email).map(e => e.email) as string[];
+
+      if (recipients.length === 0) {
+        return res.status(404).json({ error: "No active employees with valid email addresses found." });
+      }
+
+      const { sendDailyPlanReminderEmail } = await import('./email');
+      const result = await sendDailyPlanReminderEmail({ recipients });
+
+      if (!result.success) {
+        return res.status(500).json({ error: "Failed to send reminder email." });
+      }
+
+      res.json({ success: true, count: recipients.length });
+    } catch (err) {
+      console.error("[REMINDER API] Failed:", err);
+      res.status(500).json({ error: "Server error while sending reminders." });
+    }
+  });
+
+  app.post("/api/daily-plans/deviations", async (req, res) => {
+    try {
+        const { employeeId, taskId, taskName, projectName, reason } = req.body;
+        const date = new Date().toISOString().split('T')[0];
+        const plan = await storage.getDailyPlanByDate(employeeId, date);
+        if (!plan) return res.status(400).json({ error: "Plan for the day must be submitted first." });
+
+        const existingTasks = await storage.getPlanTasks(plan.id);
+        const deviationsCount = existingTasks.filter(t => t.isDeviation).length;
+        if (deviationsCount >= 2) {
+            return res.status(403).json({ error: "Maximum limit of 2 deviations per day reached." });
+        }
+
+        const task = await storage.createPlanTask({
+            planId: plan.id,
+            taskId,
+            taskName,
+            projectName,
+            isDeviation: true,
+            deviationReason: reason,
+            status: 'pending' 
+        });
+
+        // Notify manager of deviation
+        try {
+          const { sendDeviationNotificationEmail } = await import('./email');
+          const employee = await storage.getEmployee(employeeId);
+          await sendDeviationNotificationEmail({
+             employeeName: employee?.name || 'Employee',
+             employeeCode: employee?.employeeCode || employeeId,
+             taskName,
+             projectName,
+             reason
+          });
+        } catch (e) {
+          console.error('[EMAIL] Deviation notification failed:', e);
+        }
+
+        broadcast("daily_plan_deviation", { task, employeeId });
+        res.status(201).json(task);
+    } catch (error) {
+        console.error("Deviation error:", error);
+        res.status(500).json({ error: "Failed to add deviation" });
+    }
+  });
+
+  app.get("/api/pending-deadline-tasks", async (req, res) => {
+    try {
+      const { employeeId, date } = req.query;
+      res.json([]); // Placeholder
+    } catch (err) {
+      res.status(500).json([]);
+    }
+  });
+
+  app.get("/api/daily-plans/all", async (req, res) => {
+    try {
+      const plans = await storage.getAllDailyPlans();
+      const enrichedPlans = await Promise.all(plans.map(async (p: any) => {
+        const employee = await storage.getEmployee(p.employeeId);
+        const tasks = await storage.getPlanTasks(p.id);
+        // Fetch postponements for this employee on this date
+        const postponements = await pool.query(
+          `SELECT task_name, reason, new_due_date FROM task_postponements WHERE postponed_by = $1 AND DATE(postponed_at) = $2::date`,
+          [p.employeeId, p.date]
+        );
+        return {
+          ...p,
+          employeeName: employee?.name || 'Unknown',
+          employeeCode: employee?.employeeCode || 'Unknown',
+          tasks,
+          postponedTasks: postponements.rows || []
+        };
+      }));
+      res.json(enrichedPlans);
+    } catch (error) {
+      console.error("Get all daily plans error:", error);
+      res.status(500).json({ error: "Failed to fetch daily plans" });
+    }
+  });
+
+  app.patch("/api/daily-plans/tasks/:taskId/status", async (req, res) => {
+     try {
+       const { taskId } = req.params;
+       const { status } = req.body; // 'approved' or 'rejected'
+       await storage.updatePlanTask(taskId, { status });
+       res.json({ success: true });
+     } catch (error) {
+       console.error("Update plan task status error:", error);
+       res.status(500).json({ error: "Failed to update status" });
+     }
+  });
+
   // Get available PMS tasks grouped by project for the employee's department
   app.get("/api/available-tasks", async (req, res) => {
     try {
@@ -1567,7 +1917,7 @@ export async function registerRoutes(
 
       // SYNC WITH PMS: Fetch real-time progress from hierarchy
       const progress = await getProjectProgress(projectId);
-      const targetPoints = Math.round(progress * 6);
+      const targetPoints = Math.round(progress * 10);
 
       // Upsert into local points table
       await pool.query(
