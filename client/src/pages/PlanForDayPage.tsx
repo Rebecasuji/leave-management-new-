@@ -189,7 +189,9 @@ export default function PlanForDayPage() {
         taskId: t.id,
         taskName: t.task_name,
         reason: commonReason,
-        newDueDate: commonNewDueDate
+        newDueDate: commonNewDueDate,
+        start_date: t.start_date,
+        end_date: t.end_date
       }));
 
     if (showUnselectedForm) {

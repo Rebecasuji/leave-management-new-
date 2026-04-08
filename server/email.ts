@@ -655,8 +655,8 @@ export async function sendDeviationNotificationEmail(data: {
 export async function sendDailyPlanSubmittedEmail(data: {
   employeeName: string;
   employeeCode: string;
-  selectedTasks: { task_name: string; projectName?: string }[];
-  unselectedTasks: { taskName: string; reason: string; newDueDate: string }[];
+  selectedTasks: { task_name: string; projectName?: string; start_date?: string; end_date?: string }[];
+  unselectedTasks: { taskName: string; reason: string; newDueDate: string; start_date?: string; end_date?: string }[];
 }) {
   const { employeeName, employeeCode, selectedTasks, unselectedTasks } = data;
   const date = new Date().toLocaleDateString('en-IN');
@@ -666,14 +666,18 @@ export async function sendDailyPlanSubmittedEmail(data: {
     <tr>
       <td style="padding:8px;border:1px solid #e2e8f0;">${t.task_name}</td>
       <td style="padding:8px;border:1px solid #e2e8f0;">${t.projectName || '—'}</td>
+      <td style="padding:8px;border:1px solid #e2e8f0;white-space:nowrap;">${t.start_date ? new Date(t.start_date).toLocaleDateString('en-IN') : '—'}</td>
+      <td style="padding:8px;border:1px solid #e2e8f0;white-space:nowrap;">${t.end_date ? new Date(t.end_date).toLocaleDateString('en-IN') : '—'}</td>
     </tr>`).join('');
 
   const unselectedRows = unselectedTasks.length > 0 ? unselectedTasks.map(t => `
     <tr>
       <td style="padding:8px;border:1px solid #e2e8f0;">${t.taskName}</td>
       <td style="padding:8px;border:1px solid #e2e8f0;font-style:italic;">${t.reason}</td>
+      <td style="padding:8px;border:1px solid #e2e8f0;white-space:nowrap;">${t.start_date ? new Date(t.start_date).toLocaleDateString('en-IN') : '—'}</td>
+      <td style="padding:8px;border:1px solid #e2e8f0;white-space:nowrap;">${t.end_date ? new Date(t.end_date).toLocaleDateString('en-IN') : '—'}</td>
       <td style="padding:8px;border:1px solid #e2e8f0;">${t.newDueDate}</td>
-    </tr>`).join('') : '<tr><td colspan="3" style="padding:8px;text-align:center;color:#94a3b8;">None</td></tr>';
+    </tr>`).join('') : '<tr><td colspan="5" style="padding:8px;text-align:center;color:#94a3b8;">None</td></tr>';
 
   const html = `
     <div style="font-family: Arial, sans-serif; max-width: 650px; margin: 0 auto; padding: 24px; border: 1px solid #ddd; border-radius: 10px;">
@@ -687,6 +691,8 @@ export async function sendDailyPlanSubmittedEmail(data: {
           <tr style="background:#f0fdf4;">
             <th style="padding:8px;border:1px solid #e2e8f0;text-align:left;">Task</th>
             <th style="padding:8px;border:1px solid #e2e8f0;text-align:left;">Project</th>
+            <th style="padding:8px;border:1px solid #e2e8f0;text-align:left;">Start Date</th>
+            <th style="padding:8px;border:1px solid #e2e8f0;text-align:left;">End Date</th>
           </tr>
         </thead>
         <tbody>${selectedRows}</tbody>
@@ -699,7 +705,9 @@ export async function sendDailyPlanSubmittedEmail(data: {
           <tr style="background:#fffbeb;">
             <th style="padding:8px;border:1px solid #e2e8f0;text-align:left;">Task</th>
             <th style="padding:8px;border:1px solid #e2e8f0;text-align:left;">Reason</th>
-            <th style="padding:8px;border:1px solid #e2e8f0;text-align:left;">New Due Date</th>
+            <th style="padding:8px;border:1px solid #e2e8f0;text-align:left;">Start</th>
+            <th style="padding:8px;border:1px solid #e2e8f0;text-align:left;">End</th>
+            <th style="padding:8px;border:1px solid #e2e8f0;text-align:left;">Next Target</th>
           </tr>
         </thead>
         <tbody>${unselectedRows}</tbody>
