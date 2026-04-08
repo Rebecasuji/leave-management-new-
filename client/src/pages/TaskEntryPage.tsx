@@ -1237,13 +1237,19 @@ export default function TaskEntryPage() {
         const m = force ?? TEAM[Math.floor(Math.random() * TEAM.length)];
         const message = msg ?? MESSAGES[Math.floor(Math.random() * MESSAGES.length)];
         const nid = ++popId.current;
-        setPopups(p => [...p, { id: nid, member: m, msg: message, x: x ?? (10 + Math.random() * 78), y: y ?? (10 + Math.random() * 60) }]);
+        // Force position to top area to avoid obstructing content
+        const posX = 15 + Math.random() * 10;
+        const posY = 10 + Math.random() * 10;
+        setPopups(p => [...p, { id: nid, member: m, msg: message, x: posX, y: posY }]);
         setTimeout(() => setPopups(p => p.filter(d => d.id !== nid)), 2900);
     }, []);
 
     const spawnScore = useCallback((text: string, color = '#a78bfa') => {
         const nid = ++popId.current;
-        setScores(p => [...p, { id: nid, text, x: window.innerWidth * .2 + Math.random() * window.innerWidth * .55, y: 55 + Math.random() * 150, color }]);
+        // Position score floaters in the bottom area near the corner popups
+        const posX = 40 + Math.random() * 80;
+        const posY = window.innerHeight - 180 - Math.random() * 60;
+        setScores(p => [...p, { id: nid, text, x: posX, y: posY, color }]);
         setTimeout(() => setScores(p => p.filter(s => s.id !== nid)), 1600);
     }, []);
 
@@ -1253,7 +1259,7 @@ export default function TaskEntryPage() {
             localStorage.setItem('taskXP', String(n));
             if (Math.floor(n / 100) > Math.floor(prev / 100)) {
                 if (soundOn) playSound('levelup');
-                spawnMember('Promoted! 🎊', 50, 35);
+                spawnMember('Promoted! 🎊', 22, 50);
                 setShakeHeader(true); setTimeout(() => setShakeHeader(false), 700);
             }
             return n;
@@ -1280,10 +1286,7 @@ export default function TaskEntryPage() {
         return () => { window.removeEventListener('keydown', onKey); clearTimeout(t); };
     }, [soundOn]);
 
-    useEffect(() => {
-        const t = setInterval(() => { if (Math.random() < .45) { spawnMember(); if (soundOn) playSound('pop'); } }, 8000);
-        return () => clearInterval(t);
-    }, [soundOn, spawnMember]);
+    // Auto-spawn interval removed — no mascots on TaskEntry page
 
     useEffect(() => {
         if (!id || !user) {
@@ -1341,7 +1344,7 @@ export default function TaskEntryPage() {
         setConfetti(true); setTimeout(() => setConfetti(false), 5000);
         setFirework(Date.now());
         const msgs = mode === 'add' ? WIN_ADD : WIN_EDIT;
-        TEAM.slice(0, 5).forEach((m, i) => setTimeout(() => spawnMember(msgs[i % msgs.length], 8 + i * 20, 12 + Math.random() * 55, m), i * 280));
+        TEAM.slice(0, 5).forEach((m, i) => setTimeout(() => spawnMember(msgs[i % msgs.length], 22 + i * 15, 60 + Math.random() * 10, m), i * 280));
         const ns = streak + 1; setStreak(ns); localStorage.setItem('taskStreak', String(ns));
         addXP((mode === 'add' ? 25 : 15) + (ns >= 3 ? 10 : 0));
         if (ns >= 3) setTimeout(() => spawnScore(`🔥 ${ns}-day streak!`, '#f97316'), 900);
@@ -1356,7 +1359,7 @@ export default function TaskEntryPage() {
         const fmtDesc = (t: any) => { let d = t.title + (' | ' + (t.subTask || '')); if (t.description) d += ' | ' + t.description; return d; };
         const fmtDur = (m: number) => `${Math.floor(m / 60)}h ${m % 60}m`;
         if (soundOn) playSound('woosh');
-        spawnMember('Submitting… 📤', 50, 28, TEAM[5]);
+        spawnMember('Submitting… 📤', 22, 55, TEAM[5]);
         if (id) {
             if (id.startsWith('local-')) {
                 const s = localStorage.getItem(storageKey);
@@ -1383,21 +1386,12 @@ export default function TaskEntryPage() {
             <style>{ALL_KEYFRAMES}</style>
             <ConfettiCanvas active={confetti} />
             <FireworkCanvas trigger={firework} />
-            {popups.map(d => <MemberPopupEl key={d.id} d={d} />)}
+            {/* MemberPopupEl and CornerBuddy hidden on Add Entry page — avatars should not display here */}
             {scores.map(s => <ScoreFloat key={s.id} s={s} />)}
-            {!id && user?.role === 'employee' && user?.name?.toLowerCase() !== 'durga devi' && (
-                <CornerBuddy 
-                    typing={typing} 
-                    soundOn={soundOn} 
-                    activeBuddyId={activeBuddyId}
-                    onSwitchBuddy={setActiveBuddyId}
-                    currentUser={user}
-                />
-            )}
 
             <div className="min-h-screen bg-slate-950 p-4 md:p-6">
                 <div className="max-w-4xl mx-auto space-y-4">
-                    {user && user?.name?.toLowerCase() !== 'durga devi' && <FlyInRobot />}
+                    {/* FlyInRobot hidden on Add Entry page */}
 
                     {/* HEADER */}
                     <div className="flex items-center justify-between flex-wrap gap-3"
@@ -1456,6 +1450,7 @@ export default function TaskEntryPage() {
                                 onSave={handleSaveTask}
                                 onCancel={() => { if (soundOn) playSound('pop'); setLocation(`/tracker?date=${dateStr}`); }}
                                 user={user ? { role: user.role, employeeCode: user.employeeCode, department: user.department } : undefined}
+                                date={dateStr}
                             />
                         </div>
                     </div>

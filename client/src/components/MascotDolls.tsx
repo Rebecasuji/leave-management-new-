@@ -19,8 +19,8 @@ export default function MascotDolls() {
             const newDoll = {
                 id,
                 text: text || "Hurray!",
-                x: x || (20 + Math.random() * 60), // fallback %
-                y: y || (20 + Math.random() * 60)  // fallback %
+                x: 75 + Math.random() * 10, // Always top-right
+                y: 8 + Math.random() * 8    // Always near top edge
             };
             setDolls(prev => [...prev, newDoll]);
 

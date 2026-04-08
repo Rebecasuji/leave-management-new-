@@ -2,7 +2,7 @@ import { Card } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
-import { Clock, Target, TrendingUp, Send } from 'lucide-react';
+import { Clock, Target, TrendingUp, Send, CheckCircle } from 'lucide-react';
 
 interface ShiftSelectorProps {
   shiftHours: 4 | 8 | 12;
@@ -10,6 +10,7 @@ interface ShiftSelectorProps {
   totalWorkedMinutes: number;
   onFinalSubmit: () => void;
   canSubmit: boolean;
+  isLocked?: boolean;
 }
 
 export default function ShiftSelector({ 
@@ -17,7 +18,8 @@ export default function ShiftSelector({
   onShiftChange, 
   totalWorkedMinutes,
   onFinalSubmit,
-  canSubmit
+  canSubmit,
+  isLocked
 }: ShiftSelectorProps) {
   const shiftMinutes = shiftHours * 60;
   const remainingMinutes = Math.max(0, shiftMinutes - totalWorkedMinutes);
@@ -93,20 +95,30 @@ export default function ShiftSelector({
         </div>
       </Card>
 
-      <Card className="bg-slate-800/50 border-blue-500/20 p-4 flex items-center justify-center">
+    <Card className="bg-slate-800/50 border-blue-500/20 p-4 flex items-center justify-center">
         <Button
           onClick={onFinalSubmit}
-          // button remains clickable even when `canSubmit` is false; submission handler
-          // will open the pending-deadline dialog or show validation messages as needed.
+          disabled={!canSubmit || isLocked}
           className={`w-full ${
-            canSubmit 
-              ? 'bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500' 
-              : 'bg-slate-700 text-slate-400 cursor-not-allowed opacity-50'
+            isLocked 
+              ? 'bg-blue-600/20 text-blue-300 opacity-50 cursor-not-allowed'
+              : canSubmit 
+                ? 'bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 shadow-lg shadow-green-500/10' 
+                : 'bg-slate-700 text-slate-400 cursor-not-allowed opacity-50'
           }`}
           data-testid="button-final-submit"
         >
-          <Send className="w-4 h-4 mr-2" />
-          Final Submit
+          {isLocked ? (
+            <>
+              <CheckCircle className="w-4 h-4 mr-2" />
+              Finalized for Today
+            </>
+          ) : (
+            <>
+              <Send className="w-4 h-4 mr-2" />
+              Final Submit
+            </>
+          )}
         </Button>
       </Card>
     </div>

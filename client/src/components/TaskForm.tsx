@@ -51,6 +51,7 @@ interface TaskFormProps {
   existingTasks?: Task[];
   user?: { role: string; employeeCode: string; department?: string };
   saveButtonText?: string;
+  date?: string;
 }
 
 const TOOLS_LIST = [
@@ -75,7 +76,7 @@ type Project = {
   project_name: string;
 };
 
-export default function TaskForm({ task, onSave, onCancel, user, saveButtonText }: TaskFormProps) {
+export default function TaskForm({ task, onSave, onCancel, user, saveButtonText, date }: TaskFormProps) {
   const { user: authUser } = useAuth();
   const [formData, setFormData] = useState<Task>({
     project: task?.project || '',
@@ -198,24 +199,31 @@ export default function TaskForm({ task, onSave, onCancel, user, saveButtonText 
 
   useEffect(() => {
     async function fetchDailyPlan() {
+      setIsLoadingPlan(true);
       if (!authUser?.id) {
         setIsLoadingPlan(false);
         return;
       }
       try {
-        const res = await fetch(`/api/daily-plans/today/${authUser.id}`);
+        // Use the provided date or fall back to today's date in YYYY-MM-DD format
+        const targetDate = date || new Date().toISOString().split('T')[0];
+        const res = await fetch(`/api/daily-plans/${targetDate}/${authUser.id}`);
         if (res.ok) {
            const json = await res.json();
            if (json.submitted) setDailyPlan(json);
+           else setDailyPlan(null); // Reset if no plan for that date
+        } else {
+           setDailyPlan(null);
         }
       } catch (err) {
         console.error('Failed to fetch daily plan:', err);
+        setDailyPlan(null);
       } finally {
         setIsLoadingPlan(false);
       }
     }
     fetchDailyPlan();
-  }, [authUser]);
+  }, [authUser, date]);
 
   const sortedTasks = [...(tasks || [])].sort((a, b) => {
     if (!dailyPlan) return 0;
@@ -652,7 +660,7 @@ export default function TaskForm({ task, onSave, onCancel, user, saveButtonText 
                     )
                   ) : (
                     <div className="py-4 px-8 text-xs text-red-400 font-bold italic text-center">
-                      <p>No Daily Plan submitted for today.</p>
+                      <p>No Daily Plan submitted for the selected date.</p>
                       <Button 
                         variant="ghost" 
                         size="sm" 
@@ -724,7 +732,7 @@ export default function TaskForm({ task, onSave, onCancel, user, saveButtonText 
                   try {
                     if (formData.quantify && formData.quantify.trim().length > 0) {
                       playSound('confirm', 2);
-                      window.dispatchEvent(new CustomEvent('mascot:doll', { detail: { text: "Nice numbers!", x: 70, y: 60 } }));
+                      // window.dispatchEvent(new CustomEvent('mascot:doll', { detail: { text: "Nice numbers!", x: 70, y: 60 } }));
                       speak('Haha! Nice numbers.');
                       const el = document.querySelector('[data-testid="input-quantify"]') as HTMLElement | null;
                       if (el) {
@@ -762,7 +770,7 @@ export default function TaskForm({ task, onSave, onCancel, user, saveButtonText 
                     }
                   } catch { }
                 }}
-                onBlur={() => { try { if (formData.achievements && formData.achievements.trim().length > 0) { playSound('wow'); window.dispatchEvent(new CustomEvent('mascot:doll', { detail: { text: "Amazing!", x: 30, y: 65 } })); speak('Wow, really great! Keep it up.'); popEmoji(document.querySelector('[data-testid="input-achievements"]') as HTMLElement, '🎉'); } } catch { } }}
+                onBlur={() => { try { if (formData.achievements && formData.achievements.trim().length > 0) { playSound('wow'); speak('Wow, really great! Keep it up.'); popEmoji(document.querySelector('[data-testid="input-achievements"]') as HTMLElement, '🎉'); } } catch { } }}
                 className="bg-slate-700/50 border-blue-500/20 text-white"
                 data-testid="input-achievements"
               />
@@ -813,7 +821,7 @@ export default function TaskForm({ task, onSave, onCancel, user, saveButtonText 
                   setFormData({ ...formData, description: e.target.value });
                   if (words.length === 20) {
                     playSound('wow');
-                    window.dispatchEvent(new CustomEvent('mascot:doll', { detail: { text: "Love the detail!", x: 80, y: 70 } }));
+                    // window.dispatchEvent(new CustomEvent('mascot:doll', { detail: { text: "Love the detail!", x: 80, y: 70 } }));
                   }
                 }
               }}
@@ -881,7 +889,7 @@ export default function TaskForm({ task, onSave, onCancel, user, saveButtonText 
                     setFormData({ ...formData, percentageComplete: val });
                     if (val === 100) {
                       playSound('hurray');
-                      window.dispatchEvent(new CustomEvent('mascot:doll', { detail: { text: "Hurray! 100%!", x: 50, y: 20 } }));
+                      // window.dispatchEvent(new CustomEvent('mascot:doll', { detail: { text: "Hurray! 100%!", x: 50, y: 20 } }));
                     }
                   }}
                   className="bg-slate-700/50 border-blue-500/20 text-white text-center"

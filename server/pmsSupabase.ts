@@ -158,8 +158,19 @@ export const getProjects = async (userRole?: string, userEmpCode?: string, userD
 
     // Apply client-side department filtering if user has department (including admins)
     // ⚡ SPECIAL BYPASS: Admin (specifically E0001) sees ALL projects regardless of department
+    // ⚡ SPECIAL RESTRICTION: Controller (specifically E0046) sees ONLY Software Development projects
     const isAdmin = userRole === 'admin' || userEmpCode === 'E0001';
     
+    if (userEmpCode === 'E0046') {
+      console.log("🔄 Applying SPECIAL RESTRICTION for E0046: Software Development projects only");
+      const softwareProjects = enrichedProjects.filter(p => 
+        p.project_name.toLowerCase().includes('software development') || 
+        (Array.isArray(p.department) && p.department.some(d => d.toLowerCase().includes('software')))
+      );
+      console.log(`📊 E0046 special filter: ${softwareProjects.length} projects`);
+      return softwareProjects;
+    }
+
     if (userDepartment && !isAdmin) {
       console.log("🔄 Applying client-side department filtering for:", userDepartment);
       const filteredProjects = enrichedProjects.filter(project => {

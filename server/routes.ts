@@ -1404,32 +1404,36 @@ export async function registerRoutes(
         const recipientEmails = notifyList.map(e => e.email).filter(Boolean) as string[];
 
         // Also notify the employee who postponed (confirmation)
+        let actorName = postponedBy || 'Unknown User';
         if (postponedBy) {
           const actor = await storage.getEmployee(postponedBy);
-          if (actor?.email) recipientEmails.push(actor.email);
+          if (actor) {
+            if (actor.email) recipientEmails.push(actor.email);
+            actorName = `${actor.name} (${actor.employeeCode})`;
+          }
         }
 
         const uniqueRecipients = Array.from(new Set(recipientEmails));
 
         if (uniqueRecipients.length > 0) {
-          // Send email directly using the internal helper or just log if not available
-          // Since this is server-side, we should use the email module, not apiRequest (which is client-side)
           try {
-            // We can't use apiRequest here. It's likely a mistake in the previous code copy-paste.
-            // We should import sendEmail from ./email or similar if available.
-            // For now, let's just log it as the email implementation seems to be imported dynamically elsewhere.
-            const { sendEmail } = await import('./email');
-            await sendEmail({
-              to: uniqueRecipients,
-              subject: `Task Deadline Extended: Task ${taskId}`,
-              html: `
-                 <h3>Task Deadline Extended</h3>
-                 <p><strong>Task:</strong> ${taskName || taskId}</p>
-                 <p><strong>Postponed By:</strong> ${postponedBy}</p>
-                 <p><strong>Reason:</strong> ${reason}</p>
-                 <p><strong>New Due Date:</strong> ${newDueDate}</p>
-                 <p><strong>Previous Due Date:</strong> ${previousDueDate || 'N/A'}</p>
-               `
+            const { sendTaskPostponementEmail } = await import('./email');
+
+            const fmtPrev = previousDueDate && !isNaN(new Date(previousDueDate).getTime())
+              ? new Date(previousDueDate).toLocaleDateString('en-IN')
+              : (previousDueDate ? previousDueDate.split('T')[0] : 'N/A');
+
+            const fmtNew = newDueDate && !isNaN(new Date(newDueDate).getTime())
+              ? new Date(newDueDate).toLocaleDateString('en-IN')
+              : newDueDate;
+
+            await sendTaskPostponementEmail({
+              recipients: uniqueRecipients,
+              taskName: taskName || taskId,
+              postponedByDetails: actorName,
+              reason: reason,
+              newDueDate: fmtNew,
+              previousDueDate: fmtPrev
             });
           } catch (e) {
             console.error("Failed to send extension email:", e);

@@ -740,3 +740,54 @@ export async function sendDailyPlanReminderEmail(data: { recipients: string[] })
   console.log(`[ALERT EMAIL] Sending reminder to ${recipients.length} employees`);
   return await sendEmail({ to: recipients, subject, html });
 }
+
+export async function sendTaskPostponementEmail(data: {
+  recipients: string[];
+  taskName: string;
+  postponedByDetails: string;
+  reason: string;
+  newDueDate: string;
+  previousDueDate: string;
+}) {
+  const { recipients, taskName, postponedByDetails, reason, newDueDate, previousDueDate } = data;
+  const subject = `Task Deadline Extended: ${taskName}`;
+
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 650px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
+      <h2 style="color: #2563eb; border-bottom: 2px solid #bfdbfe; padding-bottom: 12px; margin-top: 0;">📅 Task Deadline Extended</h2>
+      <p style="color: #334155; font-size: 15px; margin-bottom: 20px;">A task deadline has been postponed. Below are the details of the extension:</p>
+      
+      <table style="width: 100%; border-collapse: collapse;">
+        <tbody>
+          <tr>
+            <td style="padding: 14px 16px; border: 1px solid #e2e8f0; font-weight: 600; background-color: #f8fafc; width: 35%; color: #475569;">Task</td>
+            <td style="padding: 14px 16px; border: 1px solid #e2e8f0; color: #0f172a; font-weight: 500;">${taskName}</td>
+          </tr>
+          <tr>
+            <td style="padding: 14px 16px; border: 1px solid #e2e8f0; font-weight: 600; background-color: #f8fafc; color: #475569;">Postponed By</td>
+            <td style="padding: 14px 16px; border: 1px solid #e2e8f0; color: #0f172a;">${postponedByDetails}</td>
+          </tr>
+          <tr>
+            <td style="padding: 14px 16px; border: 1px solid #e2e8f0; font-weight: 600; background-color: #f8fafc; color: #475569;">Reason</td>
+            <td style="padding: 14px 16px; border: 1px solid #e2e8f0; font-style: italic; color: #ea580c; background-color: #fff7ed;">"${reason}"</td>
+          </tr>
+          <tr>
+            <td style="padding: 14px 16px; border: 1px solid #e2e8f0; font-weight: 600; background-color: #f8fafc; color: #475569;">New Due Date</td>
+            <td style="padding: 14px 16px; border: 1px solid #e2e8f0; font-weight: bold; color: #16a34a; background-color: #f0fdf4;">${newDueDate}</td>
+          </tr>
+          <tr>
+            <td style="padding: 14px 16px; border: 1px solid #e2e8f0; font-weight: 600; background-color: #f8fafc; color: #475569;">Previous Due Date</td>
+            <td style="padding: 14px 16px; border: 1px solid #e2e8f0; color: #64748b; text-decoration: line-through;">${previousDueDate}</td>
+          </tr>
+        </tbody>
+      </table>
+      
+      <div style="margin-top: 30px; padding-top: 15px; border-top: 1px solid #f1f5f9; text-align: center; color: #94a3b8; font-size: 13px;">
+        <p>This is an automated notification from the Time Strap System.</p>
+      </div>
+    </div>
+  `;
+
+  console.log(`[POSTPONEMENT EMAIL] Sending to: ${recipients.length} recipients`);
+  return await sendEmail({ to: recipients, subject, html });
+}

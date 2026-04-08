@@ -164,7 +164,7 @@ export default function GreetingAssistant({ userName }: GreetingAssistantProps) 
     return (
         <AnimatePresence>
             {isVisible && (
-                <div className="fixed bottom-8 right-8 z-[100] select-none pointer-events-none" style={{ perspective: '2000px' }}>
+                <div className="fixed top-20 right-8 z-[100] select-none pointer-events-none" style={{ perspective: '2000px' }}>
                     <motion.div
                         ref={assistantRef}
                         drag
@@ -184,11 +184,11 @@ export default function GreetingAssistant({ userName }: GreetingAssistantProps) 
                     >
                         <motion.div animate={controls} className="relative group flex flex-col items-center">
                             
-                            {/* Speech Bubble */}
+                            {/* Speech Bubble (Appears below when assistant is in top area) */}
                             <motion.div
-                                initial={{ opacity: 0, y: 20, scale: 0.5 }}
-                                animate={{ opacity: 1, y: -40, scale: 1, transition: { delay: 0.15, type: "spring", stiffness: 140 } }}
-                                className="absolute -top-24 left-1/2 -translate-x-1/2 bg-slate-900/95 backdrop-blur-2xl text-white p-5 rounded-3xl shadow-[0_25px_50px_rgba(0,0,0,0.5)] border border-white/10 min-w-[240px] z-[120]"
+                                initial={{ opacity: 0, y: -20, scale: 0.5 }}
+                                animate={{ opacity: 1, y: 40, scale: 1, transition: { delay: 0.15, type: "spring", stiffness: 140 } }}
+                                className="absolute top-24 left-1/2 -translate-x-1/2 bg-slate-900/95 backdrop-blur-2xl text-white p-5 rounded-3xl shadow-[0_25px_50px_rgba(0,0,0,0.5)] border border-white/10 min-w-[240px] z-[120]"
                                 style={{ translateZ: "120px" }}
                             >
                                 <div className="flex flex-col gap-2">
@@ -210,7 +210,7 @@ export default function GreetingAssistant({ userName }: GreetingAssistantProps) 
                                         </>
                                     )}
                                 </div>
-                                <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 w-5 h-5 bg-slate-900 transform rotate-45 border-r border-b border-white/10"></div>
+                                <div className="absolute -top-2 left-1/2 -translate-x-1/2 w-5 h-5 bg-slate-900 transform rotate-45 border-t border-l border-white/10"></div>
                             </motion.div>
 
                             {/* Close Button */}

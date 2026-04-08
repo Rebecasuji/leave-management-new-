@@ -517,6 +517,7 @@ export default function RejectionsPage({ user }: RejectionsPageProps) {
                 }}
                 onCancel={() => setEditingEntry(null)}
                 user={{ role: user.role, employeeCode: user.employeeCode, department: (user as any).department }}
+                date={editingEntry.date}
               />
             );
           })()}

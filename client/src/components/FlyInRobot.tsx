@@ -11,7 +11,7 @@ import { playSound, speak } from '@/lib/feedback';
 
 export default function FlyInRobot() {
   const [visible, setVisible] = useState(false);
-  const [pos, setPos] = useState<{ left: number; top: number }>({ left: window.innerWidth / 2, top: window.innerHeight / 4 });
+  const [pos, setPos] = useState<{ right: number; top: number }>({ right: 60, top: 60 });
   const [text, setText] = useState('');
 
   useEffect(() => {
@@ -53,11 +53,11 @@ export default function FlyInRobot() {
       try { (window as any).__lastFlyInQuote = qi; } catch {}
       const q = QUOTES[qi];
 
-      // compute target position - above element center, clamped to viewport
-      const left = Math.min(Math.max(80, (rect.left + rect.width / 2)), window.innerWidth - 80);
-      const top = Math.min(Math.max(40, rect.top - 80), window.innerHeight - 100);
+      // Position robot at the top-right of the page
+      const right = 60; 
+      const top = 60; 
 
-      setPos({ left, top });
+      setPos({ right, top });
       setText(`${message} — ${q}`);
       setVisible(true);
       try { playSound('confirm', 2); } catch {}
@@ -74,11 +74,11 @@ export default function FlyInRobot() {
     <AnimatePresence>
       {visible && (
         <motion.div
-          initial={{ opacity: 0, y: -160, scale: 0.6 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: -80, scale: 0.7 }}
+          initial={{ opacity: 0, x: 100, scale: 0.6 }}
+          animate={{ opacity: 1, x: 0, scale: 1 }}
+          exit={{ opacity: 0, x: 100, scale: 0.7 }}
           transition={{ type: 'spring', stiffness: 360, damping: 28 }}
-          style={{ position: 'fixed', left: pos.left, top: pos.top, transform: 'translate(-50%, -100%)', zIndex: 2000, pointerEvents: 'none' }}
+          style={{ position: 'fixed', right: (pos as any).right, top: pos.top, zIndex: 2000, pointerEvents: 'none' }}
         >
           <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
             <img src={(window as any).__CUSTOM_MASCOT_URL || premiumMascot || mascotImage} alt="robot" style={{ width: 96, height: 96, filter: 'drop-shadow(0 12px 24px rgba(0,0,0,0.6))' }} />

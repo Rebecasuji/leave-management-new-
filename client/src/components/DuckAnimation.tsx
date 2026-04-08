@@ -17,7 +17,7 @@ export default function DuckAnimation() {
                     repeat: Infinity,
                     ease: "linear"
                 }}
-                className="absolute bottom-20 flex items-center gap-4 text-4xl"
+                className="absolute bottom-48 flex items-center gap-4 text-4xl"
                 style={{ filter: "drop-shadow(0 5px 15px rgba(0,0,0,0.4))" }}
             >
                 {ducks.map((duck, index) => (

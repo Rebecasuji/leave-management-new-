@@ -16,7 +16,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { apiRequest, queryClient } from '@/lib/queryClient';
-import { format } from 'date-fns';
+import { format, addDays, isAfter, startOfDay } from 'date-fns';
 import * as XLSX from 'xlsx';
 import { confettiBurst, playSound } from '@/lib/feedback';
 import gamification from '@/lib/gamification';
@@ -68,6 +68,8 @@ export default function TrackerPage({ user }: TrackerPageProps) {
   const [shiftHours, setShiftHours] = useState<4 | 8 | 12>(8);
   const [, setLocation] = useLocation();
   const [showAnalytics, setShowAnalytics] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showPendingDialog, setShowPendingDialog] = useState(false);
   const [showSubmissionConfirm, setShowSubmissionConfirm] = useState(false);
   const [submittedTasks, setSubmittedTasks] = useState<Task[]>([]);
   const [showSettingsDialog, setShowSettingsDialog] = useState(false);
@@ -479,7 +481,11 @@ export default function TrackerPage({ user }: TrackerPageProps) {
   // Debug log for LMS
   console.log(`[LMS Debug] Code: ${user?.employeeCode}, Date: ${formattedDate}, Hours: ${lmsHours}, Minutes: ${lmsMinutes}, Total: ${totalCombinedMinutes}`);
 
+  const alreadySubmittedToday = todaysEntries.some(e => e.date === formattedDate && (e.status === 'pending' || e.status === 'approved'));
+
   const canSubmit =
+    !isSubmitting &&
+    !alreadySubmittedToday &&
     pendingTasks.length > 0 &&
     totalCombinedMinutes >= shiftHours * 60 &&
     pendingDeadlineTasks.length === 0;
@@ -551,8 +557,6 @@ export default function TrackerPage({ user }: TrackerPageProps) {
     window.dispatchEvent(new CustomEvent('mascot:doll', { detail: { text: "Task Complete! Hurray!", x: 50, y: 30 } }));
   };
 
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [showPendingDialog, setShowPendingDialog] = useState(false);
 
   // automatically refresh pending deadline tasks whenever date or user changes
   // helper that filters a list of PMS tasks for those due on selected date
@@ -659,9 +663,9 @@ export default function TrackerPage({ user }: TrackerPageProps) {
       // Store tasks for confirmation display
       const tasksToSubmit = [...pendingTasks];
 
-      // Submit all pending tasks to database
-      for (const task of pendingTasks) {
-        await apiRequest('POST', '/api/time-entries', {
+      // Submit all pending tasks to database in parallel for performance
+      await Promise.all(pendingTasks.map(task => 
+        apiRequest('POST', '/api/time-entries', {
           employeeId: user.id,
           employeeCode: user.employeeCode,
           employeeName: user.name,
@@ -681,8 +685,8 @@ export default function TrackerPage({ user }: TrackerPageProps) {
           pmsSubtaskId: (task as any).pmsSubtaskId,
           keyStep: task.keyStep,
           status: 'pending',
-        });
-      }
+        })
+      ));
 
       // Send email notification to managers
       try {
@@ -940,9 +944,36 @@ export default function TrackerPage({ user }: TrackerPageProps) {
                 selected={selectedDate}
                 onSelect={(date) => {
                   if (date) {
+                    const today = startOfDay(new Date());
+                    const maxDate = addDays(today, 4);
+                    
+                    if (isAfter(startOfDay(date), maxDate)) {
+                      toast({
+                        title: "Action Restricted",
+                        description: "not applicable to early to enter",
+                        variant: "destructive"
+                      });
+                      return;
+                    }
+                    
                     setSelectedDate(date);
                     loadTasksForDate(date);
                   }
+                }}
+                onDayClick={(date, modifiers) => {
+                  if (modifiers.tooEarly) {
+                    toast({
+                      title: "Action Restricted",
+                      description: "not applicable to early to enter",
+                      variant: "destructive"
+                    });
+                  }
+                }}
+                modifiers={{
+                  tooEarly: { after: addDays(startOfDay(new Date()), 4) }
+                }}
+                modifiersClassNames={{
+                  tooEarly: "text-muted-foreground opacity-50 cursor-not-allowed"
                 }}
                 className="rounded-md"
               />
@@ -966,6 +997,7 @@ export default function TrackerPage({ user }: TrackerPageProps) {
         totalWorkedMinutes={totalCombinedMinutes} // Pass the COMBINED minutes here
         onFinalSubmit={handleFinalSubmit}
         canSubmit={canSubmit}
+        isLocked={alreadySubmittedToday}
       />
 
       {/* LMS Hours Display - Debug visibility */}
@@ -1037,7 +1069,9 @@ export default function TrackerPage({ user }: TrackerPageProps) {
                 <div className="flex items-center gap-2">
                   <Send className="w-5 h-5 text-yellow-400" />
                   <span className="text-yellow-200">
-                    {pendingTasks.length} task{pendingTasks.length > 1 ? 's' : ''} pending submission
+                    {alreadySubmittedToday 
+                      ? "Timesheet finalized! Additional drafts are saved but cannot be submitted." 
+                      : `${pendingTasks.length} task${pendingTasks.length > 1 ? 's' : ''} pending submission`}
                   </span>
                 </div>
               )}
