@@ -655,63 +655,94 @@ export async function sendDeviationNotificationEmail(data: {
 export async function sendDailyPlanSubmittedEmail(data: {
   employeeName: string;
   employeeCode: string;
-  selectedTasks: { task_name: string; projectName?: string; start_date?: string; end_date?: string }[];
-  unselectedTasks: { taskName: string; reason: string; newDueDate: string; start_date?: string; end_date?: string }[];
+  selectedTasks: { task_name: string; projectName?: string; start_date?: string; end_date?: string; progress?: number; isOverdue?: boolean }[];
+  unselectedTasks: { taskName: string; reason: string; newDueDate: string; start_date?: string; end_date?: string; progress?: number; isOverdue?: boolean }[];
 }) {
   const { employeeName, employeeCode, selectedTasks, unselectedTasks } = data;
   const date = new Date().toLocaleDateString('en-IN');
   const subject = `[Daily Plan Submitted] ${employeeName} (${employeeCode}) - ${date}`;
 
-  const selectedRows = selectedTasks.map(t => `
-    <tr>
-      <td style="padding:8px;border:1px solid #e2e8f0;">${t.task_name}</td>
-      <td style="padding:8px;border:1px solid #e2e8f0;">${t.projectName || '—'}</td>
-      <td style="padding:8px;border:1px solid #e2e8f0;white-space:nowrap;">${t.start_date ? new Date(t.start_date).toLocaleDateString('en-IN') : '—'}</td>
-      <td style="padding:8px;border:1px solid #e2e8f0;white-space:nowrap;">${t.end_date ? new Date(t.end_date).toLocaleDateString('en-IN') : '—'}</td>
-    </tr>`).join('');
+  const overdueSelectedTasks = selectedTasks.filter(t => t.isOverdue);
+  const onTrackSelectedTasks = selectedTasks.filter(t => !t.isOverdue);
+  const overdueUnselectedTasks = unselectedTasks.filter(t => t.isOverdue);
+  const onTrackUnselectedTasks = unselectedTasks.filter(t => !t.isOverdue);
 
-  const unselectedRows = unselectedTasks.length > 0 ? unselectedTasks.map(t => `
+  const generateTaskRow = (t: any, isUnselected: boolean = false) => {
+    const progress = t.progress !== undefined ? `${t.progress}%` : '0%';
+    const progressColor = t.progress === 100 ? '#16a34a' : t.progress && t.progress > 0 ? '#2563eb' : '#64748b';
+    
+    if (isUnselected) {
+      return `
+      <tr>
+        <td style="padding:10px 8px;border-bottom:1px solid #e2e8f0;font-weight:500;">${t.taskName}</td>
+        <td style="padding:10px 8px;border-bottom:1px solid #e2e8f0;font-style:italic;color:#64748b;">${t.reason}</td>
+        <td style="padding:10px 8px;border-bottom:1px solid #e2e8f0;font-weight:bold;color:${progressColor};text-align:center;">${progress}</td>
+        <td style="padding:10px 8px;border-bottom:1px solid #e2e8f0;white-space:nowrap;font-size:12px;text-align:center;">
+          <div><span style="color:#94a3b8">Start:</span> ${t.start_date ? new Date(t.start_date).toLocaleDateString('en-IN') : '—'}</div>
+          <div><span style="color:#94a3b8">End:</span> ${t.end_date ? new Date(t.end_date).toLocaleDateString('en-IN') : '—'}</div>
+        </td>
+        <td style="padding:10px 8px;border-bottom:1px solid #e2e8f0;text-align:center;font-weight:bold;color:#d97706;">${new Date(t.newDueDate).toLocaleDateString('en-IN')}</td>
+      </tr>`;
+    }
+
+    return `
     <tr>
-      <td style="padding:8px;border:1px solid #e2e8f0;">${t.taskName}</td>
-      <td style="padding:8px;border:1px solid #e2e8f0;font-style:italic;">${t.reason}</td>
-      <td style="padding:8px;border:1px solid #e2e8f0;white-space:nowrap;">${t.start_date ? new Date(t.start_date).toLocaleDateString('en-IN') : '—'}</td>
-      <td style="padding:8px;border:1px solid #e2e8f0;white-space:nowrap;">${t.end_date ? new Date(t.end_date).toLocaleDateString('en-IN') : '—'}</td>
-      <td style="padding:8px;border:1px solid #e2e8f0;">${t.newDueDate}</td>
-    </tr>`).join('') : '<tr><td colspan="5" style="padding:8px;text-align:center;color:#94a3b8;">None</td></tr>';
+      <td style="padding:10px 8px;border-bottom:1px solid #e2e8f0;font-weight:500;">${t.task_name}</td>
+      <td style="padding:10px 8px;border-bottom:1px solid #e2e8f0;color:#475569;">${t.projectName || '—'}</td>
+      <td style="padding:10px 8px;border-bottom:1px solid #e2e8f0;font-weight:bold;color:${progressColor};text-align:center;">${progress}</td>
+      <td style="padding:10px 8px;border-bottom:1px solid #e2e8f0;white-space:nowrap;font-size:12px;text-align:center;">
+        <div><span style="color:#94a3b8">Start:</span> ${t.start_date ? new Date(t.start_date).toLocaleDateString('en-IN') : '—'}</div>
+        <div><span style="color:#94a3b8">End:</span> ${t.end_date ? new Date(t.end_date).toLocaleDateString('en-IN') : '—'}</div>
+      </td>
+    </tr>`;
+  };
+
+  const renderTable = (rows: string, isUnselected: boolean = false, isOverdue: boolean = false) => {
+    if (!rows) return '';
+    return `
+      <div style="margin-top: 15px; border-radius: 8px; overflow: hidden; border: 1px solid ${isOverdue ? '#fca5a5' : '#e2e8f0'};">
+        <div style="background: ${isOverdue ? '#fef2f2' : (isUnselected ? '#fffbeb' : '#f0fdf4')}; padding: 10px 15px; border-bottom: 1px solid ${isOverdue ? '#fca5a5' : '#e2e8f0'}; font-weight: bold; color: ${isOverdue ? '#dc2626' : (isUnselected ? '#d97706' : '#16a34a')}; display: flex; align-items: center; justify-content: space-between;">
+          ${isOverdue ? '⚠️ OVERDUE TASKS' : '✅ ON-TRACK TASKS'}
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:13px;background:#ffffff;">
+          <thead>
+            <tr style="background:#f8fafc; border-bottom: 2px solid #e2e8f0;">
+              <th style="padding:12px 8px;text-align:left;color:#475569;font-weight:600;">Task</th>
+              ${isUnselected 
+                ? '<th style="padding:12px 8px;text-align:left;color:#475569;font-weight:600;">Reason</th>'
+                : '<th style="padding:12px 8px;text-align:left;color:#475569;font-weight:600;">Project</th>'}
+              <th style="padding:12px 8px;text-align:center;color:#475569;font-weight:600;">Progress</th>
+              <th style="padding:12px 8px;text-align:center;color:#475569;font-weight:600;">Timeline</th>
+              ${isUnselected ? '<th style="padding:12px 8px;text-align:center;color:#475569;font-weight:600;">Next Target</th>' : ''}
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  };
 
   const html = `
-    <div style="font-family: Arial, sans-serif; max-width: 650px; margin: 0 auto; padding: 24px; border: 1px solid #ddd; border-radius: 10px;">
-      <h2 style="color: #2563eb; border-bottom: 2px solid #93c5fd; padding-bottom: 10px;">📋 Daily Plan Submitted</h2>
-      <p><strong>Employee:</strong> ${employeeName} (${employeeCode})</p>
-      <p><strong>Date:</strong> ${date}</p>
+    <div style="font-family: Arial, sans-serif; max-width: 700px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; background: #fafafa;">
+      <div style="background: #ffffff; padding: 20px; border-radius: 8px; border: 1px solid #e2e8f0; margin-bottom: 20px; border-left: 4px solid #2563eb;">
+        <h2 style="color: #1e3a8a; margin-top: 0; margin-bottom: 8px;">📋 Daily Plan Submitted</h2>
+        <p style="margin: 4px 0; color: #475569;"><strong>Employee:</strong> <span style="color:#0f172a;">${employeeName} (${employeeCode})</span></p>
+        <p style="margin: 4px 0; color: #475569;"><strong>Date:</strong> <span style="color:#0f172a;">${date}</span></p>
+      </div>
 
-      <h3 style="color: #16a34a; margin-top: 24px;">✅ Selected Tasks (${selectedTasks.length})</h3>
-      <table style="width:100%;border-collapse:collapse;font-size:13px;">
-        <thead>
-          <tr style="background:#f0fdf4;">
-            <th style="padding:8px;border:1px solid #e2e8f0;text-align:left;">Task</th>
-            <th style="padding:8px;border:1px solid #e2e8f0;text-align:left;">Project</th>
-            <th style="padding:8px;border:1px solid #e2e8f0;text-align:left;">Start Date</th>
-            <th style="padding:8px;border:1px solid #e2e8f0;text-align:left;">End Date</th>
-          </tr>
-        </thead>
-        <tbody>${selectedRows}</tbody>
-      </table>
+      <h3 style="color: #0f172a; margin-top: 24px; padding-bottom: 8px; border-bottom: 2px solid #e2e8f0;">🎯 Selected Tasks (${selectedTasks.length})</h3>
+      ${selectedTasks.length === 0 ? '<p style="color:#64748b; font-style:italic; text-align:center; padding: 15px;">No tasks selected.</p>' : ''}
+      ${renderTable(overdueSelectedTasks.map(t => generateTaskRow(t)).join(''), false, true)}
+      ${renderTable(onTrackSelectedTasks.map(t => generateTaskRow(t)).join(''), false, false)}
 
       ${unselectedTasks.length > 0 ? `
-      <h3 style="color: #d97706; margin-top: 24px;">⏭️ Tasks Not Selected (${unselectedTasks.length}) — Requires Review</h3>
-      <table style="width:100%;border-collapse:collapse;font-size:13px;">
-        <thead>
-          <tr style="background:#fffbeb;">
-            <th style="padding:8px;border:1px solid #e2e8f0;text-align:left;">Task</th>
-            <th style="padding:8px;border:1px solid #e2e8f0;text-align:left;">Reason</th>
-            <th style="padding:8px;border:1px solid #e2e8f0;text-align:left;">Start</th>
-            <th style="padding:8px;border:1px solid #e2e8f0;text-align:left;">End</th>
-            <th style="padding:8px;border:1px solid #e2e8f0;text-align:left;">Next Target</th>
-          </tr>
-        </thead>
-        <tbody>${unselectedRows}</tbody>
-      </table>` : ''}
+      <h3 style="color: #0f172a; margin-top: 32px; padding-bottom: 8px; border-bottom: 2px solid #e2e8f0;">⏭️ Tasks Not Selected (${unselectedTasks.length}) — Requires Review</h3>
+      ${renderTable(overdueUnselectedTasks.map(t => generateTaskRow(t, true)).join(''), true, true)}
+      ${renderTable(onTrackUnselectedTasks.map(t => generateTaskRow(t, true)).join(''), true, false)}
+      ` : ''}
+      
+      <div style="margin-top: 30px; text-align: center; color: #94a3b8; font-size: 12px; border-top: 1px solid #e2e8f0; padding-top: 15px;">
+        Auto-generated by Time Strap
+      </div>
     </div>
   `;
 

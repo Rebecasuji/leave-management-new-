@@ -191,7 +191,9 @@ export default function PlanForDayPage() {
         reason: commonReason,
         newDueDate: commonNewDueDate,
         start_date: t.start_date,
-        end_date: t.end_date
+        end_date: t.end_date,
+        progress: t.progress,
+        isOverdue: t.isOverdue
       }));
 
     if (showUnselectedForm) {

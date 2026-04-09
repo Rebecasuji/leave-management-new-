@@ -535,18 +535,28 @@ export async function registerRoutes(
         return res.status(400).json({ error: result.error });
       }
 
-      // Plan for the Day Check
-      const plan = await storage.getDailyPlanByDate(entryData.employeeId, entryData.date);
-      if (!plan) {
-         return res.status(403).json({ error: "You must submit your 'Plan for the Day' before filling timesheets." });
-      }
+      // Plan for the Day Check (Only for today or future dates)
+      const todayStr = new Date().toLocaleDateString('en-CA'); // 'YYYY-MM-DD' in local time equivalent using CA locale format or just ISO up to T
+      // To ensure correct comparison, let's just use string comparison with today's date in YYYY-MM-DD
+      const now = new Date();
+      const offset = now.getTimezoneOffset() * 60000;
+      const localTodayStr = new Date(now.getTime() - offset).toISOString().split('T')[0];
 
-      // Check if task exists in the plan
-      const planTasks = await storage.getPlanTasks(plan.id);
-      const isPlanned = planTasks.some(pt => pt.taskId === entryData.pmsId || pt.taskId === entryData.pmsSubtaskId);
-      
-      if (!isPlanned && (entryData.pmsId || entryData.pmsSubtaskId)) {
-         return res.status(403).json({ error: "This task is not part of today's plan. Please add it as a deviation first." });
+      const isPastDay = entryData.date < localTodayStr;
+
+      if (!isPastDay) {
+        const plan = await storage.getDailyPlanByDate(entryData.employeeId, entryData.date);
+        if (!plan) {
+           return res.status(403).json({ error: "You must submit your 'Plan for the Day' before filling timesheets." });
+        }
+
+        // Check if task exists in the plan
+        const planTasks = await storage.getPlanTasks(plan.id);
+        const isPlanned = planTasks.some(pt => pt.taskId === entryData.pmsId || pt.taskId === entryData.pmsSubtaskId);
+        
+        if (!isPlanned && (entryData.pmsId || entryData.pmsSubtaskId)) {
+           return res.status(403).json({ error: "This task is not part of today's plan. Please add it as a deviation first." });
+        }
       }
 
       const entry = await storage.createTimeEntry(result.data);
