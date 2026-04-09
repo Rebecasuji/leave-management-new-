@@ -34,33 +34,46 @@ console.log("[EMAIL CONFIG] Recipients:", NOTIFICATION_RECIPIENTS);
    HELPERS / TEMPLATES
 ============================ */
 
-function generateTaskTable(tasks: TimeEntry[]) {
+function generateTaskTable(tasks: any[]) {
   return `
-    <table style="width:100%; border-collapse: collapse; margin-top: 20px; font-size: 14px;">
+    <table style="width:100%; border-collapse: collapse; margin-top: 20px; font-size: 13px;">
       <thead>
         <tr style="background-color: #1e293b; color: #ffffff;">
-          <th style="padding: 12px; border: 1px solid #334155; text-align: left;">Project</th>
-          <th style="padding: 12px; border: 1px solid #334155; text-align: left;">Task Description</th>
-          <th style="padding: 12px; border: 1px solid #334155; text-align: center;">Hrs</th>
-          <th style="padding: 12px; border: 1px solid #334155; text-align: center;">Status</th>
+          <th style="padding: 10px; border: 1px solid #334155; text-align: left;">Project / Task</th>
+          <th style="padding: 10px; border: 1px solid #334155; text-align: center;">Timeline</th>
+          <th style="padding: 10px; border: 1px solid #334155; text-align: center;">Hrs</th>
+          <th style="padding: 10px; border: 1px solid #334155; text-align: center;">Status</th>
         </tr>
       </thead>
       <tbody>
-        ${tasks.map(task => `
+        ${tasks.map(task => {
+          const progress = task.percentageComplete !== undefined ? `${task.percentageComplete}%` : '—';
+          const progressColor = task.percentageComplete === 100 ? '#16a34a' : (task.percentageComplete || 0) > 0 ? '#2563eb' : '#64748b';
+          const startDate = task.pmsStartDate ? new Date(task.pmsStartDate).toLocaleDateString('en-IN') : '—';
+          const endDate = task.pmsEndDate ? new Date(task.pmsEndDate).toLocaleDateString('en-IN') : '—';
+          
+          return `
           <tr style="border-bottom: 1px solid #e2e8f0;">
-            <td style="padding: 12px; border: 1px solid #e2e8f0;">${task.projectName}</td>
-            <td style="padding: 12px; border: 1px solid #e2e8f0;">${task.taskDescription}</td>
-            <td style="padding: 12px; border: 1px solid #e2e8f0; text-align: center;">${task.totalHours}</td>
-            <td style="padding: 12px; border: 1px solid #e2e8f0; text-align: center;">
-               <span style="padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; 
+            <td style="padding: 10px; border: 1px solid #e2e8f0;">
+              <div><strong>${task.projectName || '—'}</strong></div>
+              <div style="font-size: 12px; color: #64748b; margin-top: 4px;">${task.taskDescription || '—'}</div>
+              <div style="margin-top: 4px;"><span style="color:${progressColor}; font-weight:bold;">Progress: ${progress}</span></div>
+            </td>
+            <td style="padding: 10px; border: 1px solid #e2e8f0; text-align: center; white-space: nowrap; font-size: 11px; color: #475569;">
+              <div>S: ${startDate}</div>
+              <div style="margin-top:2px;">E: ${endDate}</div>
+            </td>
+            <td style="padding: 10px; border: 1px solid #e2e8f0; text-align: center; font-weight: bold;">${task.totalHours || '—'}</td>
+            <td style="padding: 10px; border: 1px solid #e2e8f0; text-align: center;">
+               <span style="padding: 4px 8px; border-radius: 4px; font-size: 10px; font-weight: bold; 
                 ${task.status === 'approved' ? 'background: #dcfce7; color: #166534;' :
-      task.status === 'rejected' ? 'background: #fee2e2; color: #991b1b;' :
-        'background: #dbeafe; color: #1e40af;'}">
+                  task.status === 'rejected' ? 'background: #fee2e2; color: #991b1b;' :
+                  'background: #dbeafe; color: #1e40af;'}">
                 ${(task.status || 'PENDING').toUpperCase()}
               </span>
             </td>
           </tr>
-        `).join('')}
+        `}).join('')}
       </tbody>
     </table>
   `;
@@ -828,5 +841,421 @@ export async function sendTaskPostponementEmail(data: {
   `;
 
   console.log(`[POSTPONEMENT EMAIL] Sending to: ${recipients.length} recipients`);
+  return await sendEmail({ to: recipients, subject, html });
+}
+
+/* ============================
+   TIMESHEET CONFIRMATION EMAIL
+   Sent to the employee after they submit their timesheet
+============================ */
+export async function sendTimesheetConfirmationEmail(data: {
+  employeeName: string;
+  employeeCode: string;
+  employeeEmail: string;
+  date: string;
+  totalHours: string;
+  tasks: any[];
+}) {
+  const { employeeName, employeeCode, employeeEmail, date, totalHours, tasks } = data;
+  const subject = `✅ Timesheet Submitted – ${date}`;
+  const taskTable = generateTaskTable(tasks);
+
+  const html = `
+    <div style="font-family:'Segoe UI',Arial,sans-serif;max-width:680px;margin:0 auto;background:#f8fafc;border-radius:16px;overflow:hidden;border:1px solid #e2e8f0;">
+      <!-- Header -->
+      <div style="background:linear-gradient(135deg,#0f172a 0%,#1e3a8a 100%);padding:32px 30px;text-align:center;">
+        <h1 style="color:#3b82f6;margin:0;font-size:26px;letter-spacing:-0.5px;">⏱ Time Strap</h1>
+        <p style="color:#93c5fd;margin:8px 0 0;font-size:15px;">Timesheet Submission Confirmed</p>
+      </div>
+
+      <!-- Body -->
+      <div style="padding:30px;background:#ffffff;">
+        <p style="margin:0 0 20px;font-size:15px;color:#334155;">
+          Hi <strong>${employeeName}</strong>, your timesheet for <strong>${date}</strong> has been successfully submitted and is pending approval.
+        </p>
+
+        <!-- Summary Card -->
+        <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:10px;padding:18px 22px;margin-bottom:24px;">
+          <table style="width:100%;border-collapse:collapse;">
+            <tr>
+              <td style="padding:4px 0;color:#475569;font-size:13px;width:150px;">Employee</td>
+              <td style="padding:4px 0;color:#0f172a;font-weight:600;">${employeeName} (${employeeCode})</td>
+            </tr>
+            <tr>
+              <td style="padding:4px 0;color:#475569;font-size:13px;">Date</td>
+              <td style="padding:4px 0;color:#0f172a;font-weight:600;">${date}</td>
+            </tr>
+            <tr>
+              <td style="padding:4px 0;color:#475569;font-size:13px;">Total Hours</td>
+              <td style="padding:4px 0;color:#2563eb;font-weight:700;font-size:16px;">${totalHours}</td>
+            </tr>
+          </table>
+        </div>
+
+        <!-- Task Table -->
+        <h3 style="color:#0f172a;margin:0 0 12px;font-size:15px;border-left:4px solid #3b82f6;padding-left:10px;">Tasks Submitted (${tasks.length})</h3>
+        ${taskTable}
+
+        <!-- What's Next -->
+        <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:16px 20px;margin-top:24px;">
+          <p style="margin:0;font-size:13px;color:#92400e;">
+            <strong>⏳ What's next?</strong> Your timesheet is now with your reporting manager for approval. You will receive a notification once it is reviewed.
+          </p>
+        </div>
+      </div>
+
+      <!-- Footer -->
+      <div style="padding:18px 30px;background:#f1f5f9;text-align:center;border-top:1px solid #e2e8f0;">
+        <p style="margin:0;font-size:12px;color:#64748b;">Automated notification from <strong>Time Strap</strong> — Do not reply to this email.</p>
+      </div>
+    </div>
+  `;
+
+  console.log(`[TIMESHEET CONFIRM EMAIL] Sending to: ${employeeEmail}`);
+  return await sendEmail({ to: [employeeEmail], subject, html });
+}
+
+/* ============================
+   DAILY PLAN CONFIRMATION EMAIL
+   Sent to the employee after they submit their Plan for the Day
+============================ */
+export async function sendDailyPlanConfirmationEmail(data: {
+  employeeName: string;
+  employeeCode: string;
+  employeeEmail: string;
+  date: string;
+  selectedTasks: { task_name: string; projectName?: string; start_date?: string; end_date?: string; progress?: number; isOverdue?: boolean }[];
+  unselectedTasks: { taskName: string; reason: string; newDueDate: string; start_date?: string; end_date?: string; progress?: number; isOverdue?: boolean }[];
+}) {
+  const { employeeName, employeeCode, employeeEmail, date, selectedTasks, unselectedTasks } = data;
+  const subject = `📋 Plan for the Day Submitted – ${date}`;
+
+  const formatDate = (d?: string) => d ? new Date(d).toLocaleDateString('en-IN') : '—';
+  const progressBar = (pct: number = 0) => {
+    const color = pct === 100 ? '#16a34a' : pct > 0 ? '#2563eb' : '#94a3b8';
+    return `<div style="background:#e2e8f0;border-radius:20px;height:6px;width:80px;display:inline-block;vertical-align:middle;">
+      <div style="background:${color};height:6px;border-radius:20px;width:${pct}%;"></div>
+    </div> <span style="color:${color};font-weight:700;font-size:12px;">${pct}%</span>`;
+  };
+
+  const selectedRows = selectedTasks.map(t => `
+    <tr style="${t.isOverdue ? 'background:#fff7ed;' : ''}">
+      <td style="padding:10px 10px;border-bottom:1px solid #e2e8f0;">
+        ${t.isOverdue ? '<span style="color:#ef4444;font-size:11px;font-weight:bold;">⚠ OVERDUE </span>' : ''}
+        <strong>${t.task_name}</strong>
+      </td>
+      <td style="padding:10px 10px;border-bottom:1px solid #e2e8f0;color:#475569;font-size:13px;">${t.projectName || '—'}</td>
+      <td style="padding:10px 10px;border-bottom:1px solid #e2e8f0;white-space:nowrap;font-size:12px;">
+        <div><span style="color:#94a3b8;">Start:</span> ${formatDate(t.start_date)}</div>
+        <div><span style="color:#94a3b8;">End:</span> ${formatDate(t.end_date)}</div>
+      </td>
+      <td style="padding:10px 10px;border-bottom:1px solid #e2e8f0;text-align:center;">${progressBar(t.progress || 0)}</td>
+    </tr>`).join('');
+
+  const unselectedRows = unselectedTasks.map(t => `
+    <tr style="${t.isOverdue ? 'background:#fff7ed;' : ''}">
+      <td style="padding:10px 10px;border-bottom:1px solid #e2e8f0;">
+        ${t.isOverdue ? '<span style="color:#ef4444;font-size:11px;font-weight:bold;">⚠ OVERDUE </span>' : ''}
+        <strong>${t.taskName}</strong>
+      </td>
+      <td style="padding:10px 10px;border-bottom:1px solid #e2e8f0;font-style:italic;color:#64748b;font-size:13px;">${t.reason}</td>
+      <td style="padding:10px 10px;border-bottom:1px solid #e2e8f0;white-space:nowrap;font-size:12px;">
+        <div><span style="color:#94a3b8;">Start:</span> ${formatDate(t.start_date)}</div>
+        <div><span style="color:#94a3b8;">End:</span> ${formatDate(t.end_date)}</div>
+      </td>
+      <td style="padding:10px 10px;border-bottom:1px solid #e2e8f0;text-align:center;">${progressBar(t.progress || 0)}</td>
+      <td style="padding:10px 10px;border-bottom:1px solid #e2e8f0;color:#d97706;font-weight:bold;font-size:12px;">${formatDate(t.newDueDate)}</td>
+    </tr>`).join('');
+
+  const html = `
+    <div style="font-family:'Segoe UI',Arial,sans-serif;max-width:720px;margin:0 auto;background:#f8fafc;border-radius:16px;overflow:hidden;border:1px solid #e2e8f0;">
+      <!-- Header -->
+      <div style="background:linear-gradient(135deg,#0f172a 0%,#1e3a8a 100%);padding:32px 30px;text-align:center;">
+        <h1 style="color:#3b82f6;margin:0;font-size:26px;">⏱ Time Strap</h1>
+        <p style="color:#93c5fd;margin:8px 0 0;font-size:15px;">Plan for the Day — Confirmed</p>
+      </div>
+
+      <div style="padding:30px;background:#ffffff;">
+        <p style="font-size:15px;color:#334155;margin:0 0 20px;">
+          Hi <strong>${employeeName}</strong> 👋, your <strong>Plan for the Day</strong> on <strong>${date}</strong> has been successfully submitted.
+        </p>
+
+        <!-- Summary Card -->
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:16px 20px;margin-bottom:24px;">
+          <p style="margin:0;font-size:13px;color:#166534;">
+            ✅ <strong>${selectedTasks.length}</strong> task(s) planned for today &nbsp;|&nbsp;
+            <span style="color:#92400e;">⏭ <strong>${unselectedTasks.length}</strong> task(s) deferred</span>
+          </p>
+        </div>
+
+        ${selectedTasks.length > 0 ? `
+        <!-- Selected Tasks -->
+        <h3 style="color:#0f172a;margin:0 0 10px;font-size:15px;border-left:4px solid #16a34a;padding-left:10px;">🎯 Today's Selected Tasks (${selectedTasks.length})</h3>
+        <table style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;margin-bottom:24px;">
+          <thead>
+            <tr style="background:#1e293b;color:#fff;">
+              <th style="padding:10px;text-align:left;">Task</th>
+              <th style="padding:10px;text-align:left;">Project</th>
+              <th style="padding:10px;text-align:center;">Timeline</th>
+              <th style="padding:10px;text-align:center;">Progress</th>
+            </tr>
+          </thead>
+          <tbody>${selectedRows}</tbody>
+        </table>` : ''}
+
+        ${unselectedTasks.length > 0 ? `
+        <!-- Deferred Tasks -->
+        <h3 style="color:#0f172a;margin:0 0 10px;font-size:15px;border-left:4px solid #f59e0b;padding-left:10px;">⏭ Deferred Tasks (${unselectedTasks.length})</h3>
+        <table style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid #fde68a;border-radius:8px;overflow:hidden;margin-bottom:24px;">
+          <thead>
+            <tr style="background:#78350f;color:#fff;">
+              <th style="padding:10px;text-align:left;">Task</th>
+              <th style="padding:10px;text-align:left;">Reason</th>
+              <th style="padding:10px;text-align:center;">Timeline</th>
+              <th style="padding:10px;text-align:center;">Progress</th>
+              <th style="padding:10px;text-align:center;">Next Target</th>
+            </tr>
+          </thead>
+          <tbody>${unselectedRows}</tbody>
+        </table>` : ''}
+
+        <div style="background:#f1f5f9;border-radius:10px;padding:14px 18px;">
+          <p style="margin:0;font-size:13px;color:#475569;">
+            💡 <strong>Tip:</strong> Your reporting manager will review your plan. Make sure to log your timesheet before end of day.
+          </p>
+        </div>
+      </div>
+
+      <div style="padding:18px 30px;background:#f1f5f9;text-align:center;border-top:1px solid #e2e8f0;">
+        <p style="margin:0;font-size:12px;color:#64748b;">Automated notification from <strong>Time Strap</strong> — Do not reply.</p>
+      </div>
+    </div>
+  `;
+
+  console.log(`[DAILY PLAN CONFIRM EMAIL] Sending to: ${employeeEmail}`);
+  return await sendEmail({ to: [employeeEmail], subject, html });
+}
+
+/* ============================
+   MISSED SUBMISSION — ADMIN/HR NOTIFICATION
+   Sent at end of day to Admins & HR listing employees who
+   did not submit their timesheet or daily plan
+============================ */
+export async function sendMissedSubmissionAdminEmail(data: {
+  adminRecipients: string[];
+  date: string;
+  missedTimesheet: { employeeName: string; employeeCode: string; department?: string }[];
+  missedDailyPlan: { employeeName: string; employeeCode: string; department?: string }[];
+}) {
+  const { adminRecipients, date, missedTimesheet, missedDailyPlan } = data;
+  if (adminRecipients.length === 0) return { success: false, error: 'No recipients' };
+
+  const subject = `🚨 End-of-Day Report: Missed Submissions — ${date}`;
+
+  const buildTable = (employees: { employeeName: string; employeeCode: string; department?: string }[], label: string) => {
+    if (employees.length === 0) return `<p style="color:#16a34a;font-size:13px;">✅ All employees submitted on time.</p>`;
+    return `
+      <table style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid #fca5a5;border-radius:8px;overflow:hidden;">
+        <thead>
+          <tr style="background:#7f1d1d;color:#fff;">
+            <th style="padding:10px 12px;text-align:left;">#</th>
+            <th style="padding:10px 12px;text-align:left;">Employee</th>
+            <th style="padding:10px 12px;text-align:left;">Code</th>
+            <th style="padding:10px 12px;text-align:left;">Department</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${employees.map((e, i) => `
+            <tr style="background:${i % 2 === 0 ? '#fff5f5' : '#ffffff'};">
+              <td style="padding:10px 12px;border-bottom:1px solid #fecaca;">${i + 1}</td>
+              <td style="padding:10px 12px;border-bottom:1px solid #fecaca;font-weight:600;color:#0f172a;">${e.employeeName}</td>
+              <td style="padding:10px 12px;border-bottom:1px solid #fecaca;color:#64748b;">${e.employeeCode}</td>
+              <td style="padding:10px 12px;border-bottom:1px solid #fecaca;color:#64748b;">${e.department || '—'}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>`;
+  };
+
+  const html = `
+    <div style="font-family:'Segoe UI',Arial,sans-serif;max-width:720px;margin:0 auto;background:#f8fafc;border-radius:16px;overflow:hidden;border:1px solid #e2e8f0;">
+      <!-- Header -->
+      <div style="background:linear-gradient(135deg,#7f1d1d 0%,#991b1b 100%);padding:30px;text-align:center;">
+        <h1 style="color:#fca5a5;margin:0;font-size:24px;">🚨 End-of-Day Submission Report</h1>
+        <p style="color:#fecaca;margin:8px 0 0;font-size:14px;">${date} — Action Required</p>
+      </div>
+
+      <div style="padding:28px;background:#ffffff;">
+        <p style="font-size:15px;color:#334155;margin:0 0 24px;">
+          This is an automated end-of-day report. The following employees <strong>have not submitted</strong> their required records today.
+        </p>
+
+        <!-- Missed Timesheets -->
+        <h3 style="color:#991b1b;margin:0 0 12px;font-size:16px;border-left:4px solid #ef4444;padding-left:10px;">
+          ⏱ Missed Timesheet Submissions (${missedTimesheet.length})
+        </h3>
+        ${buildTable(missedTimesheet, 'Timesheet')}
+
+        <br/>
+
+        <!-- Missed Daily Plans -->
+        <h3 style="color:#92400e;margin:16px 0 12px;font-size:16px;border-left:4px solid #f59e0b;padding-left:10px;">
+          📋 Missed Plan for the Day Submissions (${missedDailyPlan.length})
+        </h3>
+        ${buildTable(missedDailyPlan, 'Daily Plan')}
+
+        <!-- Action Note -->
+        <div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:10px;padding:18px 22px;margin-top:24px;">
+          <p style="margin:0 0 8px;font-size:14px;color:#7f1d1d;font-weight:700;">⚠ Please take the following actions:</p>
+          <ul style="margin:0;padding-left:20px;font-size:13px;color:#991b1b;line-height:1.8;">
+            <li>Contact each listed employee's Reporting Manager immediately.</li>
+            <li>Missing submissions may result in <strong>LOP (Loss of Pay)</strong> as per company policy.</li>
+            <li>Verify if any submissions are in draft or pending state in the system.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div style="padding:18px 28px;background:#f1f5f9;text-align:center;border-top:1px solid #e2e8f0;">
+        <p style="margin:0;font-size:12px;color:#64748b;">Automated End-of-Day Report from <strong>Time Strap</strong></p>
+      </div>
+    </div>
+  `;
+
+  console.log(`[MISSED SUBMISSION ADMIN EMAIL] Sending to ${adminRecipients.length} admin/HR recipients`);
+  return await sendEmail({ to: adminRecipients, subject, html });
+}
+
+/* ============================
+   LOP WARNING EMAIL
+   Sent to individual employees who missed their submission
+============================ */
+export async function sendLOPWarningEmail(data: {
+  employeeName: string;
+  employeeEmail: string;
+  employeeCode: string;
+  date: string;
+  missedItems: ('timesheet' | 'daily_plan')[];
+}) {
+  const { employeeName, employeeEmail, employeeCode, date, missedItems } = data;
+  const subject = `⚠ Important: Missed Submission — Possible LOP (${date})`;
+
+  const missedTimesheetBadge = missedItems.includes('timesheet')
+    ? `<div style="background:#fee2e2;border:1px solid #fca5a5;border-radius:8px;padding:12px 16px;margin-bottom:12px;">
+        <span style="color:#991b1b;font-weight:700;">⏱ Timesheet Not Submitted</span>
+        <p style="margin:6px 0 0;font-size:13px;color:#7f1d1d;">You have not submitted your timesheet for <strong>${date}</strong>.</p>
+       </div>` : '';
+
+  const missedPlanBadge = missedItems.includes('daily_plan')
+    ? `<div style="background:#fff7ed;border:1px solid #fde68a;border-radius:8px;padding:12px 16px;margin-bottom:12px;">
+        <span style="color:#92400e;font-weight:700;">📋 Plan for the Day Not Submitted</span>
+        <p style="margin:6px 0 0;font-size:13px;color:#78350f;">You have not submitted your Plan for the Day for <strong>${date}</strong>.</p>
+       </div>` : '';
+
+  const html = `
+    <div style="font-family:'Segoe UI',Arial,sans-serif;max-width:640px;margin:0 auto;background:#f8fafc;border-radius:16px;overflow:hidden;border:1px solid #fca5a5;">
+      <!-- Header -->
+      <div style="background:linear-gradient(135deg,#7f1d1d 0%,#b91c1c 100%);padding:28px 30px;text-align:center;">
+        <h1 style="color:#fff;margin:0;font-size:22px;">⚠ Action Required</h1>
+        <p style="color:#fecaca;margin:8px 0 0;font-size:14px;">Missed Submission — ${date}</p>
+      </div>
+
+      <div style="padding:28px;background:#ffffff;">
+        <p style="font-size:15px;color:#334155;margin:0 0 20px;">
+          Dear <strong>${employeeName}</strong> (${employeeCode}),
+        </p>
+        <p style="font-size:14px;color:#475569;margin:0 0 20px;">
+          Our records indicate that you have <strong>not submitted</strong> the following for <strong>${date}</strong>:
+        </p>
+
+        ${missedTimesheetBadge}
+        ${missedPlanBadge}
+
+        <!-- LOP Warning -->
+        <div style="background:#fef2f2;border-left:5px solid #dc2626;border-radius:0 8px 8px 0;padding:18px 22px;margin-top:20px;">
+          <p style="margin:0 0 6px;font-size:16px;font-weight:900;color:#7f1d1d;">
+            ⚠ <strong style="font-size:18px;text-transform:uppercase;letter-spacing:1px;">LOP (Loss of Pay)</strong>
+          </p>
+          <p style="margin:0;font-size:13px;color:#991b1b;line-height:1.7;">
+            Failure to submit your timesheet or daily plan may result in a <strong>Loss of Pay (LOP)</strong> deduction for the day as per the company attendance policy.
+          </p>
+        </div>
+
+        <!-- Instructions -->
+        <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:16px 20px;margin-top:20px;">
+          <p style="margin:0 0 8px;font-size:14px;font-weight:700;color:#1e40af;">📌 What should you do?</p>
+          <ul style="margin:0;padding-left:20px;font-size:13px;color:#1e3a8a;line-height:2;">
+            <li>Contact your <strong>Reporting Manager</strong> immediately to explain the situation.</li>
+            <li>Reach out to <strong>HR</strong> if you believe this was a technical error.</li>
+            <li>If you still have access, submit your records through the <strong>Time Strap portal</strong>.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div style="padding:18px 28px;background:#f1f5f9;text-align:center;border-top:1px solid #e2e8f0;">
+        <p style="margin:0;font-size:12px;color:#64748b;">Automated notification from <strong>Time Strap</strong> — Please do not reply.</p>
+      </div>
+    </div>
+  `;
+
+  console.log(`[LOP WARNING EMAIL] Sending to: ${employeeEmail}`);
+  return await sendEmail({ to: [employeeEmail], subject, html });
+}
+
+/* ============================
+   PLAN WINDOW CLOSED EMAIL
+   Sent when Admin/HR marks the daily plan portal as Closed
+============================ */
+export async function sendPlanWindowClosedEmail(data: {
+  recipients: string[];
+  closedBy: string;
+  date: string;
+}) {
+  const { recipients, closedBy, date } = data;
+  if (recipients.length === 0) return { success: false, error: 'No recipients' };
+
+  const subject = `🔒 Plan for the Day Portal is Now CLOSED — ${date}`;
+
+  const html = `
+    <div style="font-family:'Segoe UI',Arial,sans-serif;max-width:620px;margin:0 auto;background:#f8fafc;border-radius:16px;overflow:hidden;border:1px solid #e2e8f0;">
+      <!-- Header -->
+      <div style="background:linear-gradient(135deg,#1e293b 0%,#334155 100%);padding:30px;text-align:center;">
+        <h1 style="color:#f59e0b;margin:0;font-size:24px;">🔒 Portal Closed</h1>
+        <p style="color:#94a3b8;margin:8px 0 0;font-size:14px;">Plan for the Day Submission Window — ${date}</p>
+      </div>
+
+      <div style="padding:28px;background:#ffffff;">
+        <div style="background:#fef3c7;border:1px solid #fde68a;border-radius:10px;padding:20px 24px;margin-bottom:24px;text-align:center;">
+          <p style="margin:0;font-size:18px;color:#78350f;font-weight:700;">
+            The <strong>Plan for the Day</strong> submission portal is now <strong>CLOSED</strong>.
+          </p>
+        </div>
+
+        <p style="font-size:14px;color:#475569;line-height:1.8;margin:0 0 16px;">
+          The submission window has been closed by <strong>${closedBy}</strong> at ${new Date().toLocaleTimeString('en-IN')} on ${date}.
+        </p>
+
+        <!-- Instructions -->
+        <div style="background:#fef2f2;border-left:5px solid #dc2626;border-radius:0 8px 8px 0;padding:16px 20px;margin-top:16px;">
+          <p style="margin:0 0 8px;font-size:14px;font-weight:700;color:#991b1b;">⚠ Submissions are no longer accepted.</p>
+          <p style="margin:0;font-size:13px;color:#7f1d1d;line-height:1.7;">
+            If you have not submitted your Plan for the Day and need assistance, please:
+          </p>
+          <ul style="margin:8px 0 0;padding-left:20px;font-size:13px;color:#7f1d1d;line-height:2;">
+            <li>Contact your <strong>Reporting Manager</strong> directly.</li>
+            <li>Reach out to the <strong>HR department</strong> for an exception or clarification.</li>
+          </ul>
+        </div>
+
+        <p style="font-size:13px;color:#64748b;margin-top:20px;text-align:center;">
+          This is an automated message. Please do not attempt to submit through the portal at this time.
+        </p>
+      </div>
+
+      <div style="padding:16px 28px;background:#f1f5f9;text-align:center;border-top:1px solid #e2e8f0;">
+        <p style="margin:0;font-size:12px;color:#64748b;">Automated notification from <strong>Time Strap</strong></p>
+      </div>
+    </div>
+  `;
+
+  console.log(`[PLAN CLOSED EMAIL] Sending to ${recipients.length} employees`);
   return await sendEmail({ to: recipients, subject, html });
 }

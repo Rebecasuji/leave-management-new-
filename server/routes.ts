@@ -685,10 +685,13 @@ export async function registerRoutes(
       const { employeeId, date } = req.params;
 
       // fetch every entry for the user on the requested date
-      const dailyEntries = await storage.getTimeEntriesByEmployeeAndDate(employeeId, date);
-      if (dailyEntries.length === 0) {
+      const entries = await storage.getTimeEntriesByEmployeeAndDate(employeeId, date);
+      if (entries.length === 0) {
         return res.status(404).json({ error: "No tasks found for this date" });
       }
+
+      // Enrich entries with PMS data (dates, key steps etc)
+      const dailyEntries = await Promise.all(entries.map(e => enrichEntry(e)));
 
       const employee = await storage.getEmployee(employeeId);
       if (!employee) {
@@ -735,7 +738,9 @@ export async function registerRoutes(
 
       // use the raw entries as tasks so the email helper has full data
       const tasks = dailyEntries;
-      const { sendTimesheetSummaryEmail } = await import('./email');
+      const { sendTimesheetSummaryEmail, sendTimesheetConfirmationEmail } = await import('./email');
+      
+      // 1. Send summary to Admin/HR (Existing)
       const emailResult = await sendTimesheetSummaryEmail({
         employeeId: employee.id,
         employeeName: employee.name,
@@ -746,6 +751,28 @@ export async function registerRoutes(
         status: 'pending',
       });
 
+      // 2. Send confirmation to employee (New)
+      if (employee.email) {
+        try {
+          await sendTimesheetConfirmationEmail({
+            employeeName: employee.name,
+            employeeCode: employee.employeeCode,
+            employeeEmail: employee.email,
+            date,
+            totalHours: totalHoursFormatted,
+            tasks: tasks.map(t => ({
+              projectName: t.projectName || '—',
+              taskDescription: t.taskDescription || '—',
+              totalHours: t.totalHours || '—',
+              status: t.status || 'pending'
+            }))
+          });
+          console.log(`[CONFIRMATION EMAIL] Sent to ${employee.email}`);
+        } catch (confirmErr) {
+          console.error('[CONFIRMATION EMAIL] Failed:', confirmErr);
+        }
+      }
+
       if (!emailResult.success) {
         return res.status(500).json({
           error: "Failed to send daily summary email",
@@ -753,7 +780,7 @@ export async function registerRoutes(
         });
       }
 
-      console.log(`[DAILY SUBMIT] Daily summary sent for ${employee.name} on ${date}`);
+      console.log(`[DAILY SUBMIT] Daily summary and confirmation sent for ${employee.name} on ${date}`);
       res.json({
         success: true,
         message: `Daily summary email sent for ${date} with ${dailyEntries.length} tasks`,
@@ -1618,8 +1645,31 @@ export async function registerRoutes(
         return res.status(403).json({ error: "Only E0046 can control the plan window." });
       }
       const settings = await readSettings();
+      const wasOpen = !!settings.planWindowOpen;
       settings.planWindowOpen = !!open;
       await writeSettings(settings);
+
+      // Trigger email if portal is closed
+      if (wasOpen && !open) {
+        try {
+          const { sendPlanWindowClosedEmail } = await import('./email');
+          const allEmployees = await storage.getEmployees();
+          const recipients = allEmployees.filter(e => e.isActive && e.email).map(e => e.email) as string[];
+          const today = new Date().toLocaleDateString('en-IN');
+          
+          if (recipients.length > 0) {
+            await sendPlanWindowClosedEmail({
+              recipients,
+              closedBy: employee.name,
+              date: today
+            });
+            console.log(`[PLAN CLOSED EMAIL] Sent to ${recipients.length} employees`);
+          }
+        } catch (emailErr) {
+          console.error('[PLAN CLOSED EMAIL] Failed:', emailErr);
+        }
+      }
+
       broadcast("plan_window_changed", { planWindowOpen: !!open, changedBy: employee.name });
       res.json({ planWindowOpen: !!open });
     } catch (err) {
@@ -1674,16 +1724,32 @@ export async function registerRoutes(
 
       broadcast("daily_plan_submitted", { plan, employeeId });
 
-      // Email notification to admin
+      // Email notification
       try {
-        const { sendDailyPlanSubmittedEmail } = await import('./email');
+        const { sendDailyPlanSubmittedEmail, sendDailyPlanConfirmationEmail } = await import('./email');
         const emp = await storage.getEmployee(employeeId);
-        await sendDailyPlanSubmittedEmail({
-          employeeName: emp?.name || 'Employee',
-          employeeCode: emp?.employeeCode || employeeId,
-          selectedTasks: selectedTasks,
-          unselectedTasks: unselectedTasks || []
-        });
+        
+        if (emp) {
+          // 1. Send to Admin/HR (Existing)
+          await sendDailyPlanSubmittedEmail({
+            employeeName: emp.name,
+            employeeCode: emp.employeeCode,
+            selectedTasks: selectedTasks,
+            unselectedTasks: unselectedTasks || []
+          });
+
+          // 2. Send confirmation to employee (New)
+          if (emp.email) {
+            await sendDailyPlanConfirmationEmail({
+              employeeName: emp.name,
+              employeeCode: emp.employeeCode,
+              employeeEmail: emp.email,
+              date: planDate,
+              selectedTasks: selectedTasks,
+              unselectedTasks: unselectedTasks || []
+            });
+          }
+        }
       } catch (emailErr) {
         console.error('[EMAIL] Daily plan notification failed:', emailErr);
       }
@@ -1723,6 +1789,108 @@ export async function registerRoutes(
     } catch (err) {
       console.error("[REMINDER API] Failed:", err);
       res.status(500).json({ error: "Server error while sending reminders." });
+    }
+  });
+
+  // ============ END OF DAY TRACKING ROUTE ============
+  app.post("/api/admin/check-missing-submissions", async (req, res) => {
+    try {
+      const { actorId } = req.body;
+      const actor = await storage.getEmployee(actorId);
+      if (!actor || (actor.role !== 'admin' && actor.role !== 'hr')) {
+        return res.status(403).json({ error: "Unauthorized. Admin/HR only." });
+      }
+
+      const today = new Date().toISOString().split('T')[0];
+      const allEmployees = await storage.getEmployees();
+      const activeEmployees = allEmployees.filter(e => e.isActive && e.role === 'employee');
+
+      const missedTimesheet: any[] = [];
+      const missedDailyPlan: any[] = [];
+
+      for (const emp of activeEmployees) {
+        // Check Daily Plan
+        const plan = await storage.getDailyPlanByDate(emp.id, today);
+        if (!plan) {
+          missedDailyPlan.push({
+            employeeName: emp.name,
+            employeeCode: emp.employeeCode,
+            department: emp.department,
+            email: emp.email
+          });
+        }
+
+        // Check Timesheet
+        const entries = await storage.getTimeEntriesByEmployeeAndDate(emp.id, today);
+        if (entries.length === 0) {
+          missedTimesheet.push({
+            employeeName: emp.name,
+            employeeCode: emp.employeeCode,
+            department: emp.department,
+            email: emp.email
+          });
+        }
+      }
+
+      const { sendMissedSubmissionAdminEmail, sendLOPWarningEmail } = await import('./email');
+      
+      // 1. Notify Admin/HR with the full list
+      const adminRecipients = (process.env.SENDER_EMAIL || "pushpa.p@ctint.in,sp@ctint.in").split(",").map(e => e.trim());
+      await sendMissedSubmissionAdminEmail({
+        adminRecipients,
+        date: today,
+        missedTimesheet: missedTimesheet.map(({ email, ...rest }) => rest),
+        missedDailyPlan: missedDailyPlan.map(({ email, ...rest }) => rest)
+      });
+
+      // 2. Notify individual employees with LOP warning
+      const allMissed = new Map<string, any>();
+      
+      missedDailyPlan.forEach(e => {
+        if (!allMissed.has(e.employeeCode)) {
+          allMissed.set(e.employeeCode, { ...e, missedItems: ['daily_plan'] });
+        } else {
+          allMissed.get(e.employeeCode).missedItems.push('daily_plan');
+        }
+      });
+
+      missedTimesheet.forEach(e => {
+        if (!allMissed.has(e.employeeCode)) {
+          allMissed.set(e.employeeCode, { ...e, missedItems: ['timesheet'] });
+        } else {
+          const item = allMissed.get(e.employeeCode);
+          if (!item.missedItems.includes('timesheet')) {
+            item.missedItems.push('timesheet');
+          }
+        }
+      });
+
+      for (const [code, details] of allMissed.entries()) {
+        if (details.email) {
+          try {
+            await sendLOPWarningEmail({
+              employeeName: details.employeeName,
+              employeeEmail: details.email,
+              employeeCode: details.employeeCode,
+              date: today,
+              missedItems: details.missedItems
+            });
+          } catch (e) {
+            console.error(`[LOP WARNING] Failed for ${details.employeeCode}:`, e);
+          }
+        }
+      }
+
+      res.json({
+        success: true,
+        summary: {
+          missedDailyPlan: missedDailyPlan.length,
+          missedTimesheet: missedTimesheet.length
+        }
+      });
+    } catch (err) {
+      console.error("[END OF DAY CHECK] Failed:", err);
+      res.status(500).json({ error: "Failed to run missed submission check." });
     }
   });
 
