@@ -258,44 +258,18 @@ export default function ApprovalPage({ user }: { user: User }) {
       return matchesSearch && matchesStatus && matchesDate;
     });
 
-    const toMinutes = (t?: string) => {
-      if (!t) return 0;
-      const parts = t.split(':').map(p => parseInt(p, 10) || 0);
-      return (parts[0] || 0) * 60 + (parts[1] || 0);
-    };
+    // Sort globally by submission timestamp (latest first)
+    return filtered.sort((a, b) => {
+      const timeA = a.submittedAt ? new Date(a.submittedAt.toString()).getTime() : 0;
+      const timeB = b.submittedAt ? new Date(b.submittedAt.toString()).getTime() : 0;
+      
+      if (timeA !== timeB) return timeB - timeA;
 
-    // Group entries by employee, sort each employee's entries chronologically,
-    // then order employees by their most recent submission (descending)
-    const groups: Record<string, ExtendedTimeEntry[]> = {};
-    for (const e of filtered) {
-      const key = e.employeeId.toString();
-      groups[key] = groups[key] || [];
-      groups[key].push(e);
-    }
-
-    const groupedArray = Object.entries(groups).map(([employeeId, entries]) => {
-      // sort individual's entries by date then startTime
-      entries.sort((a, b) => {
-        const dateA = a.date ? startOfDay(parseISO(a.date.toString())).getTime() : 0;
-        const dateB = b.date ? startOfDay(parseISO(b.date.toString())).getTime() : 0;
-        if (dateA !== dateB) return dateB - dateA;
-        return toMinutes(b.startTime) - toMinutes(a.startTime);
-      });
-
-      // find most recent submittedAt for this person
-      const latest = entries.reduce((max, it) => {
-        const t = it.submittedAt ? parseISO(it.submittedAt.toString()).getTime() : 0;
-        return Math.max(max, t);
-      }, 0);
-
-      return { employeeId, entries, latest };
+      // Secondary sort by work date if submittedAt is same
+      const dateA = a.date ? new Date(a.date.toString()).getTime() : 0;
+      const dateB = b.date ? new Date(b.date.toString()).getTime() : 0;
+      return dateB - dateA;
     });
-
-    // sort groups by latest submission desc so recent submitters appear first
-    groupedArray.sort((a, b) => b.latest - a.latest);
-
-    // flatten back to list preserving per-person chronological order
-    return groupedArray.flatMap(g => g.entries);
   }, [uniqueTimeEntries, searchQuery, statusFilter, selectedDate]);
 
   const confirmReject = () => {

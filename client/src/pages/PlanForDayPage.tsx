@@ -80,6 +80,27 @@ export default function PlanForDayPage() {
     },
   });
 
+  // End of Day Report mutation (E0046, HR/Admin only)
+  const sendEODReportMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest('POST', '/api/admin/check-missing-submissions', { actorId: user?.id });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      toast({
+        title: '📊 EOD Report Generated',
+        description: `Successfully identified ${data.summary.missedDailyPlan} missed plans and ${data.summary.missedTimesheet} missed timesheets. Notifications sent.`,
+      });
+    },
+    onError: (err: any) => {
+      toast({
+        title: '❌ Failed to run EOD report',
+        description: err.message || 'Validation failed.',
+        variant: 'destructive',
+      });
+    },
+  });
+
   // Check if plan already submitted
   const { data: planStatus, isLoading: isLoadingPlan } = useQuery({
     queryKey: ['/api/daily-plans/today', user?.id],
@@ -259,15 +280,27 @@ export default function PlanForDayPage() {
 
           {/* Admin Tools (E0046, E0048 ONLY) */}
           {(user?.employeeCode === 'E0046' || user?.employeeCode === 'E0048') && (
-            <Button
-              onClick={() => sendReminderMutation.mutate()}
-              disabled={sendReminderMutation.isPending}
-              variant="outline"
-              className="rounded-xl font-bold text-xs px-4 py-5 border-blue-500/30 bg-blue-500/5 hover:bg-blue-500/10 text-blue-400"
-            >
-              <Send className="w-4 h-4 mr-2" />
-              Alert
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                onClick={() => sendReminderMutation.mutate()}
+                disabled={sendReminderMutation.isPending}
+                variant="outline"
+                className="rounded-xl font-bold text-xs px-4 py-5 border-blue-500/30 bg-blue-500/5 hover:bg-blue-500/10 text-blue-400"
+              >
+                <Send className="w-4 h-4 mr-2" />
+                Alert
+              </Button>
+
+              <Button
+                onClick={() => sendEODReportMutation.mutate()}
+                disabled={sendEODReportMutation.isPending}
+                variant="outline"
+                className="rounded-xl font-bold text-xs px-4 py-5 border-amber-500/30 bg-amber-500/5 hover:bg-amber-500/10 text-amber-400"
+              >
+                <AlertTriangle className="w-4 h-4 mr-2" />
+                EOD Report
+              </Button>
+            </div>
           )}
 
           {isController && (
