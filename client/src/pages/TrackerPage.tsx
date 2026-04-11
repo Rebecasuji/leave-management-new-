@@ -487,7 +487,7 @@ export default function TrackerPage({ user }: TrackerPageProps) {
     !isSubmitting &&
     !alreadySubmittedToday &&
     pendingTasks.length > 0 &&
-    totalCombinedMinutes >= shiftHours * 60 &&
+    totalCombinedMinutes > 0 &&
     pendingDeadlineTasks.length === 0;
 
 
@@ -654,8 +654,8 @@ export default function TrackerPage({ user }: TrackerPageProps) {
         setIsSubmitting(false);
         return;
       }
-      if (totalCombinedMinutes < shiftHours * 60) {
-        toast({ title: 'Shift incomplete', description: 'You have not reached your shift target yet.', variant: 'destructive' });
+      if (totalCombinedMinutes <= 0) {
+        toast({ title: 'No work recorded', description: 'Please track your time before submitting.', variant: 'destructive' });
         setIsSubmitting(false);
         return;
       }

@@ -604,14 +604,16 @@ export async function sendSiteReportEmail(data: {
 // Generic email sender
 export async function sendEmail(data: {
   to: string[];
+  cc?: string[];
   subject: string;
   html: string;
 }) {
   try {
-    const { to, subject, html } = data;
+    const { to, cc, subject, html } = data;
     const { data: result, error } = await resend.emails.send({
       from: FROM_EMAIL,
       to,
+      cc,
       subject,
       html
     });
@@ -1134,8 +1136,9 @@ export async function sendLOPWarningEmail(data: {
   employeeCode: string;
   date: string;
   missedItems: ('timesheet' | 'daily_plan')[];
+  cc?: string[];
 }) {
-  const { employeeName, employeeEmail, employeeCode, date, missedItems } = data;
+  const { employeeName, employeeEmail, employeeCode, date, missedItems, cc } = data;
   const subject = `⚠ Important: Missed Submission — Possible LOP (${date})`;
 
   const missedTimesheetBadge = missedItems.includes('timesheet')
@@ -1171,19 +1174,18 @@ export async function sendLOPWarningEmail(data: {
 
         <!-- LOP Warning -->
         <div style="background:#fef2f2;border-left:5px solid #dc2626;border-radius:0 8px 8px 0;padding:18px 22px;margin-top:20px;">
-          <p style="margin:0 0 6px;font-size:16px;font-weight:900;color:#7f1d1d;">
-            ⚠ <strong style="font-size:18px;text-transform:uppercase;letter-spacing:1px;">LOP (Loss of Pay)</strong>
-          </p>
-          <p style="margin:0;font-size:13px;color:#991b1b;line-height:1.7;">
-            Failure to submit your timesheet or daily plan may result in a <strong>Loss of Pay (LOP)</strong> deduction for the day as per the company attendance policy.
-          </p>
+           <ul style="margin:0;padding:0;list-style:none;font-size:14px;color:#991b1b;line-height:1.8;">
+            <li><strong>Seek your Reporting Manager immediately.</strong></li>
+            <li><strong>Missing submissions may result in LOP (Loss of Pay) as per company policy.</strong></li>
+            <li><strong>Verify if any submissions are in draft or pending state in the system.</strong></li>
+            <li><strong>If this continues for more than 2 days, your system access may be locked.</strong></li>
+          </ul>
         </div>
 
         <!-- Instructions -->
         <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:16px 20px;margin-top:20px;">
-          <p style="margin:0 0 8px;font-size:14px;font-weight:700;color:#1e40af;">📌 What should you do?</p>
+          <p style="margin:0 0 8px;font-size:14px;font-weight:700;color:#1e40af;">📌 Next Steps</p>
           <ul style="margin:0;padding-left:20px;font-size:13px;color:#1e3a8a;line-height:2;">
-            <li>Contact your <strong>Reporting Manager</strong> immediately to explain the situation.</li>
             <li>Reach out to <strong>HR</strong> if you believe this was a technical error.</li>
             <li>If you still have access, submit your records through the <strong>Time Strap portal</strong>.</li>
           </ul>
@@ -1196,8 +1198,8 @@ export async function sendLOPWarningEmail(data: {
     </div>
   `;
 
-  console.log(`[LOP WARNING EMAIL] Sending to: ${employeeEmail}`);
-  return await sendEmail({ to: [employeeEmail], subject, html });
+  console.log(`[LOP WARNING EMAIL] Sending to: ${employeeEmail}${cc ? ` (CC: ${cc.join(', ')})` : ''}`);
+  return await sendEmail({ to: [employeeEmail], cc, subject, html });
 }
 
 /* ============================

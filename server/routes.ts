@@ -552,8 +552,17 @@ export async function registerRoutes(
 
         // Check if task exists in the plan
         const planTasks = await storage.getPlanTasks(plan.id);
-        const isPlanned = planTasks.some(pt => pt.taskId === entryData.pmsId || pt.taskId === entryData.pmsSubtaskId);
+        let isPlanned = planTasks.some(pt => pt.taskId === entryData.pmsId || pt.taskId === entryData.pmsSubtaskId);
         
+        // If not directly planned, check if it's a subtask of a planned task
+        if (!isPlanned && entryData.pmsSubtaskId) {
+           const { getSubtaskById } = await import('./pmsSupabase');
+           const subtask = await getSubtaskById(entryData.pmsSubtaskId);
+           if (subtask && subtask.task_id) {
+             isPlanned = planTasks.some(pt => pt.taskId === subtask.task_id);
+           }
+        }
+
         if (!isPlanned && (entryData.pmsId || entryData.pmsSubtaskId)) {
            return res.status(403).json({ error: "This task is not part of today's plan. Please add it as a deviation first." });
         }
@@ -722,12 +731,12 @@ export async function registerRoutes(
       const lmsData = await getLMSHours(employee.employeeCode, date);
       const totalLMSMinutes = Math.round(lmsData.totalLMSHours * 60);
       const combinedMinutes = totalMinutes + totalLMSMinutes;
-      const targetMinutes = 8 * 60;
 
-      if (combinedMinutes < targetMinutes) {
+      // Relaxed rule: allow submission as long as there is some work recorded
+      if (combinedMinutes <= 0) {
         return res.status(400).json({ 
-          error: "Insufficient hours", 
-          message: `Total hours (Work: ${formatDuration(totalMinutes)} + LMS: ${formatDuration(totalLMSMinutes)}) must reach 8 hours. Currently: ${formatDuration(combinedMinutes)}`,
+          error: "No hours recorded", 
+          message: `You must have at least some recorded hours to submit.`,
           workMinutes: totalMinutes,
           lmsMinutes: totalLMSMinutes,
           totalMinutes: combinedMinutes
@@ -1873,7 +1882,8 @@ export async function registerRoutes(
               employeeEmail: details.email,
               employeeCode: details.employeeCode,
               date: today,
-              missedItems: details.missedItems
+              missedItems: details.missedItems,
+              cc: adminRecipients
             });
           } catch (e) {
             console.error(`[LOP WARNING] Failed for ${details.employeeCode}:`, e);
@@ -1903,8 +1913,8 @@ export async function registerRoutes(
 
         const existingTasks = await storage.getPlanTasks(plan.id);
         const deviationsCount = existingTasks.filter(t => t.isDeviation).length;
-        if (deviationsCount >= 2) {
-            return res.status(403).json({ error: "Maximum limit of 2 deviations per day reached." });
+        if (deviationsCount >= 10) {
+            return res.status(403).json({ error: "Maximum limit of 10 deviations per day reached. Please contact your manager if you need more." });
         }
 
         const task = await storage.createPlanTask({

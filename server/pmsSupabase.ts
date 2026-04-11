@@ -364,6 +364,19 @@ export const getSubtasks = async (taskId?: string, userDepartment?: string, user
   }
 };
 
+export const getSubtaskById = async (subtaskId: string): Promise<PMSSubtask | null> => {
+  try {
+    const result: QueryResult = await pmsPool.query(
+      'SELECT * FROM subtasks WHERE id = $1::uuid',
+      [subtaskId]
+    );
+    return (result.rows && result.rows[0]) ? (result.rows[0] as PMSSubtask) : null;
+  } catch (error) {
+    console.error("💥 Error fetching subtask by ID:", error);
+    return null;
+  }
+};
+
 // Update a PMS task (e.g., change end_date) and return updated row
 export const updateTaskInPMS = async (taskId: string, updates: { end_date?: string, status?: string }): Promise<PMSTask | null> => {
   try {
