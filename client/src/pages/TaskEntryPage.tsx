@@ -1464,35 +1464,7 @@ export default function TaskEntryPage() {
                     </div>
                 </div>
             </div>
-            <Dialog open={showPlanAlert} onOpenChange={(open) => {
-                if (!open) setLocation(`/tracker?date=${dateStr}`);
-                setShowPlanAlert(open);
-            }}>
-                <DialogContent className="bg-slate-900/90 backdrop-blur-xl border-blue-500/30 text-white max-w-md p-8 rounded-[2rem] shadow-[0_32px_64px_rgba(0,0,0,0.8)]">
-                    <div className="flex flex-col items-center text-center space-y-6">
-                        <div className="w-20 h-20 rounded-full bg-rose-500/20 flex items-center justify-center border border-rose-500/30 animate-pulse">
-                            <AlertCircle className="w-10 h-10 text-rose-500" />
-                        </div>
-                        <div className="space-y-2">
-                            <h2 className="text-2xl font-black tracking-tight text-white uppercase">Access Restricted</h2>
-                            <p className="text-blue-100/70 text-sm leading-relaxed">
-                                You have not filled your Plan for the Day, so you cannot fill the timesheet.
-                            </p>
-                            <div className="py-2 px-4 bg-white/5 rounded-xl border border-white/10 mt-4">
-                                <p className="text-[11px] font-bold text-blue-300 uppercase tracking-widest leading-loose">
-                                    Please fill your plan of the day
-                                </p>
-                            </div>
-                        </div>
-                        <Button
-                            onClick={() => setLocation(`/tracker?date=${dateStr}`)}
-                            className="w-full bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white font-black py-6 rounded-2xl shadow-xl shadow-blue-900/40 transition-all hover:scale-[1.02] active:scale-95"
-                        >
-                            RETURN TO TRACKER
-                        </Button>
-                    </div>
-                </DialogContent>
-            </Dialog>
+      {/* Plan alert removed as per user request to allow entry without plan */}
         </>
     );
 }

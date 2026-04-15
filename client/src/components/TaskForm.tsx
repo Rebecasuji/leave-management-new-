@@ -608,7 +608,6 @@ export default function TaskForm({ task, onSave, onCancel, user, saveButtonText,
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <Label htmlFor="title" className="text-blue-100">Task *</Label>
-                {dailyPlan && (
                    <button 
                      type="button"
                      onClick={() => setShowDeviationDialog(true)}
@@ -617,7 +616,6 @@ export default function TaskForm({ task, onSave, onCancel, user, saveButtonText,
                      <Plus className="w-3 h-3" />
                      Add Deviation
                    </button>
-                )}
               </div>
               <Select
                 value={formData.title}
@@ -636,39 +634,25 @@ export default function TaskForm({ task, onSave, onCancel, user, saveButtonText,
                 </SelectTrigger>
                 <SelectContent className="max-h-[200px]">
                   {/* Ensure prefilled task is visible even if not in fetched list */}
-                  {dailyPlan ? (
-                    sortedTasks.length > 0 ? (
-                      sortedTasks.map(task => {
-                        const isPlanned = dailyPlan.tasks.some((pt: any) => pt.taskId === task.id);
-                        return (
-                          <SelectItem key={task.id} value={task.task_name} className="flex items-center justify-between gap-4">
-                            <div className="flex items-center gap-2">
-                              {task.task_name}
-                              {isPlanned && (
-                                <Badge variant="outline" className="bg-blue-600/20 text-blue-300 border-blue-500/30 text-[9px] py-0 h-4">
-                                  PLANNED
-                                </Badge>
-                              )}
-                            </div>
-                          </SelectItem>
-                        );
-                      })
-                    ) : (
-                      <div className="py-2 px-8 text-xs text-blue-400/40 italic">
-                        {formData.project ? 'No tasks found for this project' : 'Select a project first'}
-                      </div>
-                    )
+                  {sortedTasks.length > 0 ? (
+                    sortedTasks.map(task => {
+                      const isPlanned = dailyPlan?.tasks?.some((pt: any) => pt.taskId === task.id);
+                      return (
+                        <SelectItem key={task.id} value={task.task_name} className="flex items-center justify-between gap-4">
+                          <div className="flex items-center gap-2">
+                            {task.task_name}
+                            {isPlanned && (
+                              <Badge variant="outline" className="bg-blue-600/20 text-blue-300 border-blue-500/30 text-[9px] py-0 h-4">
+                                PLANNED
+                              </Badge>
+                            )}
+                          </div>
+                        </SelectItem>
+                      );
+                    })
                   ) : (
-                    <div className="py-4 px-8 text-xs text-red-400 font-bold italic text-center">
-                      <p>No Daily Plan submitted for the selected date.</p>
-                      <Button 
-                        variant="ghost" 
-                        size="sm" 
-                        className="text-blue-400 mt-2 hover:bg-blue-500/10"
-                        onClick={() => window.location.href = '/plan-for-day'}
-                      >
-                        Submit Plan Now
-                      </Button>
+                    <div className="py-2 px-8 text-xs text-blue-400/40 italic">
+                      {formData.project ? 'No tasks found for this project' : 'Select a project first'}
                     </div>
                   )}
                 </SelectContent>

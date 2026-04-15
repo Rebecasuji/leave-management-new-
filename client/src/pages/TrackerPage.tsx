@@ -486,9 +486,7 @@ export default function TrackerPage({ user }: TrackerPageProps) {
   const canSubmit =
     !isSubmitting &&
     !alreadySubmittedToday &&
-    pendingTasks.length > 0 &&
-    totalCombinedMinutes > 0 &&
-    pendingDeadlineTasks.length === 0;
+    totalCombinedMinutes > 0;
 
 
   const handleSaveTask = async (taskData: Task) => {
