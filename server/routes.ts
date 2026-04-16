@@ -2028,12 +2028,20 @@ export async function registerRoutes(
       const { getTasks } = await import('./pmsSupabase');
       const tasksWithProjects: any[] = [];
 
-      // Use local date key to avoid timezone issues when comparing deadlines
-      const formatDateLocal = (d: Date) => {
-        const dt = new Date(d);
-        return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+      // Extract just YYYY-MM-DD from a date string to avoid UTC conversion issues.
+      // E.g. "2026-04-16T00:00:00+05:30" → "2026-04-16" (no Date object created, no timezone shift)
+      const extractDatePart = (dateStr: string | null | undefined): string | null => {
+        if (!dateStr) return null;
+        return String(dateStr).substring(0, 10); // Always "YYYY-MM-DD"
       };
-      const todayKey = formatDateLocal(new Date());
+
+      // Compute today's date in IST (UTC+5:30) so the server's UTC clock doesn't cause off-by-one day errors
+      const getISTTodayKey = (): string => {
+        const now = new Date();
+        const istMs = now.getTime() + (5.5 * 60 * 60 * 1000); // shift to IST
+        return new Date(istMs).toISOString().substring(0, 10);
+      };
+      const todayKey = getISTTodayKey();
 
       for (const project of projects) {
         console.log(`[AVAILABLE-TASKS] Fetching tasks for project: ${project.project_code} (${project.project_name}) for employee: ${employee.employeeCode}`);
@@ -2048,14 +2056,11 @@ export async function registerRoutes(
         }
 
         tasksWithProjects.push(...activeTasks.map((task: any) => {
-          // Check if project deadline has passed
-          const projectDeadline = project.end_date ? new Date(project.end_date) : null;
-          const projectKey = projectDeadline ? formatDateLocal(projectDeadline) : null;
+          // Extract plain YYYY-MM-DD from stored dates to avoid timezone-based day shifts
+          const projectKey = extractDatePart(project.end_date);
           const isProjectOverdue = projectKey ? projectKey < todayKey : false;
 
-          // Check if task deadline has passed
-          const taskDeadline = task.end_date ? new Date(task.end_date) : null;
-          const taskKey = taskDeadline ? formatDateLocal(taskDeadline) : null;
+          const taskKey = extractDatePart(task.end_date);
           const isTaskOverdue = taskKey ? taskKey < todayKey : false;
 
           return {
@@ -2178,6 +2183,109 @@ export async function registerRoutes(
     } catch (error) {
       console.error('Update settings error:', error);
       res.status(500).json({ error: 'Failed to update settings' });
+    }
+  });
+
+  // ============ EOD REPORTS ROUTE ============
+  app.get("/api/reports/eod", async (req, res) => {
+    try {
+      const { date, startDate, endDate } = req.query;
+      
+      let entriesForDate: any[] = [];
+      let targetDates: string[] = [];
+
+      if (startDate && endDate) {
+        // Range mode
+        const start = new Date(startDate as string);
+        const end = new Date(endDate as string);
+        const diffDays = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+        
+        for (let i = 0; i <= diffDays; i++) {
+          const d = new Date(start);
+          d.setDate(start.getDate() + i);
+          targetDates.push(d.toISOString().split('T')[0]);
+        }
+
+        // Fetch entries for all dates in range
+        const allEntries = await Promise.all(targetDates.map(d => storage.getTimeEntriesByDate(d)));
+        entriesForDate = allEntries.flat();
+      } else if (date) {
+        // Single date mode
+        targetDates = [date as string];
+        entriesForDate = await storage.getTimeEntriesByDate(date as string);
+      } else {
+        return res.status(400).json({ error: "Date or date range is required" });
+      }
+
+      const allEmployees = await storage.getEmployees();
+      
+      const parseDurationToMinutes = (duration: string): number => {
+        if (!duration) return 0;
+        // Handle "9h 44m", "9.7", or "09:44" formats
+        const hMatch = duration.match(/(\d+)h/);
+        const mMatch = duration.match(/(\d+)m/);
+        const colonMatch = duration.match(/(\d+):(\d+)/);
+        
+        if (hMatch || mMatch) {
+          const h = hMatch ? parseInt(hMatch[1], 10) : 0;
+          const m = mMatch ? parseInt(mMatch[1], 10) : 0;
+          return h * 60 + m;
+        } else if (colonMatch) {
+          return parseInt(colonMatch[1], 10) * 60 + parseInt(colonMatch[2], 10);
+        }
+        
+        // Fallback for just digits (assuming hours)
+        const digits = parseFloat(duration);
+        if (!isNaN(digits)) return digits * 60;
+        
+        return 0;
+      };
+
+      const finalReport: any[] = [];
+
+      for (const dStr of targetDates) {
+        const dateEntries = entriesForDate.filter(e => e.date === dStr);
+        
+        allEmployees.forEach(emp => {
+          // Robust matching: match by internal ID OR stable Employee Code (handles Admin accounts better)
+          const empEntries = dateEntries.filter(e => 
+            e.employeeId === emp.id || 
+            (e.employeeCode && e.employeeCode.toUpperCase() === emp.employeeCode.toUpperCase())
+          );
+          
+          const totalMinutes = empEntries.reduce((sum, entry) => sum + parseDurationToMinutes(entry.totalHours), 0);
+          const totalHours = totalMinutes / 60;
+          
+          let status = "Not Submitted";
+          if (empEntries.length > 0) {
+            status = totalHours >= 8 ? "Submitted" : "Incomplete";
+          }
+
+          let remark = "";
+          if (status === "Submitted") remark = "Full shift completed and submitted.";
+          else if (status === "Incomplete") remark = `Partial submission: ${totalHours.toFixed(1)} hours logged.`;
+          else remark = "No timesheet entries found for this date.";
+
+          finalReport.push({
+            employeeId: emp.id,
+            employeeName: emp.name,
+            employeeCode: emp.employeeCode,
+            email: emp.email || "N/A",
+            department: emp.department || "N/A",
+            date: dStr,
+            status,
+            workingHours: totalHours.toFixed(1),
+            requiredHours: 8,
+            remark,
+            entries: empEntries
+          });
+        });
+      }
+
+      res.json(finalReport);
+    } catch (error) {
+      console.error("EOD Report error:", error);
+      res.status(500).json({ error: "Failed to fetch EOD report" });
     }
   });
 

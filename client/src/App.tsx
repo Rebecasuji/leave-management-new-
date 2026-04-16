@@ -22,6 +22,7 @@ import AnalyticsPage from '@/pages/AnalyticsPage';
 import TaskEntryPage from '@/pages/TaskEntryPage';
 import SiteEngineerTimesheet from '@/pages/SiteEngineerTimesheet';
 import RejectionsPage from '@/pages/RejectionsPage';
+import EODReportsPage from '@/pages/EODReportsPage';
 import MascotDolls from '@/components/MascotDolls';
 import PostponementsPage from '@/pages/admin/PostponementsPage';
 import DiscussionPage from '@/pages/DiscussionPage';
@@ -117,6 +118,11 @@ function AuthenticatedApp() {
               <Route path="/rejections">
                 <RejectionsPage user={user} />
               </Route>
+              {(user.role === 'manager' || user.role === 'hr' || user.role === 'admin') && (
+                <Route path="/eod-reports">
+                  <EODReportsPage user={user} />
+                </Route>
+              )}
               <Route path="/site-timesheet">
                 <SiteEngineerTimesheet />
               </Route>

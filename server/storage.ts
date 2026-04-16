@@ -557,16 +557,13 @@ export class DatabaseStorage implements IStorage {
         { employeeCode: "E0042", name: "Yuvaraj", password: "admin123", role: "employee", department: "Purchase" },
         { employeeCode: "E0032", name: "Sivaram C", password: "admin123", role: "employee", department: "Operations" },
         { employeeCode: "E0044", name: "Umar Farooque", password: "admin123", role: "employee", department: "Operations" },
-        { employeeCode: "E0028", name: "Kaalipushpa R", password: "admin123", role: "employee", department: "Presales" },
         { employeeCode: "E0009", name: "Rajinth", password: "admin123", role: "employee", department: "Operations" },
         { employeeCode: "E0048", name: "Durga Devi", password: "admin123", role: "employee", department: "Software" },
         { employeeCode: "E0047", name: "Samyuktha", email: "samyuktha@ctint.in", password: "admin123", role: "employee", department: "HR & Admin" },
         { employeeCode: "E0049", name: "Pushpa Prithviraj", password: "admin123", role: "hr", department: "HR & Admin" },
         { employeeCode: "E0050", name: "Zameela Begam", password: "admin123", role: "employee", department: "Finance" },
         { employeeCode: "E0051", name: "Arunkumar", password: "admin123", role: "employee", department: "Purchase" },
-        { employeeCode: "E0052", name: "Jyothsna Priya", password: "admin123", role: "employee", department: "Software" },
         { employeeCode: "E0053", name: "S.NAVEEN KUMAR", password: "admin123", role: "employee", department: "IT Support" },
-        { employeeCode: "E0054", name: "KIRUBA", password: "admin123", role: "employee", department: "Presales" },
       ];
 
       const existingEmployees = await this.getEmployees();
