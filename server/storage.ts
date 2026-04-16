@@ -104,6 +104,8 @@ export interface IStorage {
   getTimeEntriesByEmployee(employeeId: string): Promise<TimeEntry[]>;
   // Added for grouped daily email summaries
   getTimeEntriesByEmployeeAndDate(employeeId: string, date: string): Promise<TimeEntry[]>;
+  // Added for EOD reports — fetch ALL entries for a given date across all employees
+  getTimeEntriesByDate(date: string): Promise<TimeEntry[]>;
   getPendingTimeEntries(): Promise<TimeEntry[]>;
   createTimeEntry(entry: InsertTimeEntry): Promise<TimeEntry>;
   updateTimeEntry(id: string, data: Partial<InsertTimeEntry>): Promise<TimeEntry | undefined>;
@@ -416,6 +418,13 @@ export class DatabaseStorage implements IStorage {
         )
       )
       .orderBy(timeEntries.startTime);
+  }
+
+  // fetch ALL entries for a specific date across all employees (used by EOD Reports)
+  async getTimeEntriesByDate(date: string): Promise<TimeEntry[]> {
+    return await db.select().from(timeEntries)
+      .where(eq(timeEntries.date, date))
+      .orderBy(timeEntries.employeeId, timeEntries.startTime);
   }
 
   async getPendingTimeEntries(): Promise<TimeEntry[]> {
