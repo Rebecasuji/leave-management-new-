@@ -150,9 +150,8 @@ export default function TrackerPage({ user }: TrackerPageProps) {
   const checkPlanAndNavigate = (targetUrl: string) => {
     const isToday = formattedDate === format(new Date(), 'yyyy-MM-dd');
     if (isToday && !dailyPlanStatus?.submitted) {
-      setShowPlanAlert(true);
-      if (soundOn) playSound('error');
-      return;
+      // Allow navigation but show a small toast/warning if needed, but per user request we allow manual tasks
+      console.log('Daily plan not submitted, but allowing manual task entry per user request.');
     }
     setLocation(targetUrl);
   };
@@ -475,7 +474,27 @@ export default function TrackerPage({ user }: TrackerPageProps) {
     [allTasks, formattedDate]
   );
 
-  const totalWorkedMinutes = todaysTasksOnly.reduce((acc, task) => acc + task.durationMinutes, 0);
+  // Robust calculation of task duration (minutes)
+  const calculateTaskMinutes = (task: Task): number => {
+    if (task.durationMinutes && task.durationMinutes > 0) return task.durationMinutes;
+    if (task.startTime && task.endTime) {
+      try {
+        const [sh, sm] = task.startTime.split(':').map(Number);
+        const [eh, em] = task.endTime.split(':').map(Number);
+        let duration = (eh * 60 + em) - (sh * 60 + sm);
+        return duration > 0 ? duration : 0;
+      } catch {
+        return 0;
+      }
+    }
+    return 0;
+  };
+
+  const totalWorkedMinutes = useMemo(() => 
+    todaysTasksOnly.reduce((acc, task) => acc + calculateTaskMinutes(task), 0),
+    [todaysTasksOnly]
+  );
+  
   const totalCombinedMinutes = totalWorkedMinutes + lmsMinutes;
   
   // Debug log for LMS
@@ -483,9 +502,10 @@ export default function TrackerPage({ user }: TrackerPageProps) {
 
   const alreadySubmittedToday = todaysEntries.some(e => e.date === formattedDate && (e.status === 'pending' || e.status === 'approved'));
 
+  // Allow submission if there are pending (draft) tasks, regardless of previous submissions
   const canSubmit =
     !isSubmitting &&
-    !alreadySubmittedToday &&
+    pendingTasks.length > 0 &&
     totalCombinedMinutes > 0;
 
 
@@ -613,47 +633,40 @@ export default function TrackerPage({ user }: TrackerPageProps) {
     if (isSubmitting) return;
     setIsSubmitting(true);
     try {
-      // Check for pending deadline tasks for this employee on this date
-      try {
-        const res = await fetch(`/api/pending-deadline-tasks?employeeId=${user.id}&date=${formattedDate}`);
-        let pending: any[] = [];
-        if (res.ok) {
-          pending = await res.json();
-        }
-        // if backend returned none, fall back to availableTasks due today
-        if ((!Array.isArray(pending) || pending.length === 0) && availableTasks.length > 0) {
-          pending = extractDueToday(availableTasks);
-        }
-        if (Array.isArray(pending) && pending.length > 0) {
-          // have tasks due today – let the user know before showing the dialog
-          toast({
-            title: 'Pending PMS Tasks',
-            description: 'Some tasks are due today and must be postponed or acknowledged before you can submit.',
-          });
-          // require user to postpone or complete them first
-          setPendingDeadlineTasks(pending);
-          // initialize form
-          const formState: any = {};
-          pending.forEach((t: any) => {
-            formState[t.id] = { selected: false, reason: '', newDate: '', action: 'extend' }; // Default to extend
-          });
-          setPostponeForm(formState);
-          setShowPendingDialog(true);
-          setIsSubmitting(false);
-          return; // halt submission until user resolves
-        }
-      } catch (err) {
-        console.error('Failed to check pending deadline tasks', err);
-      }
-
-      // Validation: ensure there are tasks to submit and shift target met
       if (pendingTasks.length === 0) {
         toast({ title: 'Nothing to submit', description: 'Please add at least one task before submitting.', variant: 'destructive' });
         setIsSubmitting(false);
         return;
       }
-      if (totalCombinedMinutes <= 0) {
-        toast({ title: 'No work recorded', description: 'Please track your time before submitting.', variant: 'destructive' });
+
+      // Detailed validation of each pending task
+      const invalidTasks = pendingTasks.filter(t => {
+        const hasProject = !!t.project;
+        const hasTitle = !!t.title;
+        const hasTimes = !!t.startTime && !!t.endTime;
+        const hasTools = t.toolsUsed && t.toolsUsed.length > 0;
+        const hasQuantify = !!(t as any).quantify;
+        return !hasProject || !hasTitle || !hasTimes || !hasTools || !hasQuantify;
+      });
+
+      if (invalidTasks.length > 0) {
+        toast({
+          title: 'Incomplete Tasks',
+          description: `Please fill in all required fields (Project, Task, Start/End Time, Quantify, Tools) for all tasks before submitting.`,
+          variant: 'destructive'
+        });
+        setIsSubmitting(false);
+        return;
+      }
+
+      // Check for overlapping times or invalid durations
+      const hasInvalidDuration = pendingTasks.some(t => calculateTaskMinutes(t) <= 0);
+      if (hasInvalidDuration) {
+        toast({
+          title: 'Invalid Time Entries',
+          description: 'One or more tasks have invalid start/end times. Please correct them.',
+          variant: 'destructive'
+        });
         setIsSubmitting(false);
         return;
       }
@@ -677,7 +690,7 @@ export default function TrackerPage({ user }: TrackerPageProps) {
           toolsUsed: task.toolsUsed || [],
           startTime: task.startTime,
           endTime: task.endTime,
-          totalHours: formatDuration(task.durationMinutes),
+          totalHours: formatDuration(calculateTaskMinutes(task)), // Use calculated duration
           percentageComplete: task.percentageComplete,
           pmsId: task.pmsId,
           pmsSubtaskId: (task as any).pmsSubtaskId,
@@ -686,18 +699,11 @@ export default function TrackerPage({ user }: TrackerPageProps) {
         })
       ));
 
-      // Send email notification to managers
+      // Send daily summary email to managers and confirmation to employee
       try {
-        await apiRequest('POST', '/api/notifications/timesheet-submitted', {
-          employeeId: user.id,
-          employeeName: user.name,
-          employeeCode: user.employeeCode,
-          date: formattedDate,
-          taskCount: tasksToSubmit.length,
-          totalHours: formatDuration(tasksToSubmit.reduce((acc, t) => acc + t.durationMinutes, 0)),
-        });
+        await apiRequest('POST', `/api/time-entries/submit-daily/${user.id}/${formattedDate}`);
       } catch (emailError) {
-        console.log('Email notification skipped');
+        console.log('Daily summary email notification skipped or failed', emailError);
       }
 
       // Save submitted tasks for display and show confirmation
@@ -995,7 +1001,7 @@ export default function TrackerPage({ user }: TrackerPageProps) {
         totalWorkedMinutes={totalCombinedMinutes} // Pass the COMBINED minutes here
         onFinalSubmit={handleFinalSubmit}
         canSubmit={canSubmit}
-        isLocked={alreadySubmittedToday}
+        isLocked={alreadySubmittedToday && pendingTasks.length === 0}
       />
 
       {/* LMS Hours Display - Debug visibility */}
@@ -1068,7 +1074,7 @@ export default function TrackerPage({ user }: TrackerPageProps) {
                   <Send className="w-5 h-5 text-yellow-400" />
                   <span className="text-yellow-200">
                     {alreadySubmittedToday 
-                      ? "Timesheet finalized! Additional drafts are saved but cannot be submitted." 
+                      ? "Some tasks already submitted for today. You can still submit additional drafts." 
                       : `${pendingTasks.length} task${pendingTasks.length > 1 ? 's' : ''} pending submission`}
                   </span>
                 </div>

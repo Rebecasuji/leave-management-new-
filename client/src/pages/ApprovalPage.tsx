@@ -258,17 +258,19 @@ export default function ApprovalPage({ user }: { user: User }) {
       return matchesSearch && matchesStatus && matchesDate;
     });
 
-    // Sort globally by submission timestamp (latest first)
+    // Sort by Date (latest first), then Employee (alphabetical), then Time (chronological)
     return filtered.sort((a, b) => {
-      const timeA = a.submittedAt ? new Date(a.submittedAt.toString()).getTime() : 0;
-      const timeB = b.submittedAt ? new Date(b.submittedAt.toString()).getTime() : 0;
-      
-      if (timeA !== timeB) return timeB - timeA;
+      // 1. Date (most recent first)
+      const dateCompare = b.date.localeCompare(a.date);
+      if (dateCompare !== 0) return dateCompare;
 
-      // Secondary sort by work date if submittedAt is same
-      const dateA = a.date ? new Date(a.date.toString()).getTime() : 0;
-      const dateB = b.date ? new Date(b.date.toString()).getTime() : 0;
-      return dateB - dateA;
+      // 2. Employee Name (A-Z)
+      const nameCompare = a.employeeName.localeCompare(b.employeeName);
+      if (nameCompare !== 0) return nameCompare;
+
+      // 3. Start Time (chronological: 9:00 AM before 10:00 AM)
+      // Note: Assumes HH:mm 24h format for string comparison stability
+      return a.startTime.localeCompare(b.startTime);
     });
   }, [uniqueTimeEntries, searchQuery, statusFilter, selectedDate]);
 
@@ -560,15 +562,26 @@ export default function ApprovalPage({ user }: { user: User }) {
                           </div>
                         </div>
                       </div>
-                      <Badge className={`uppercase text-[10px] px-2 py-0.5 ${entry.status === 'pending' ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' :
-                        entry.status === 'resubmitted' ? 'bg-orange-500/20 text-orange-400 border-orange-500/50 shadow-[0_0_10px_rgba(249,115,22,0.4)] animate-pulse' :
-                          entry.status === 'approved' ? 'bg-green-500/20 text-green-400 border-green-500/30' :
-                            entry.status === 'manager_approved' ? 'bg-blue-500/20 text-blue-400 border-blue-500/30' :
-                              entry.status === 'on_hold' ? 'bg-orange-500/20 text-orange-400 border-orange-500/30' :
-                                'bg-red-500/20 text-red-400 border-red-500/30'
-                        } border`}>
-                        {entry.status ? entry.status.replace('_', ' ') : 'pending'}
-                      </Badge>
+                        <div className="flex flex-col gap-1 items-end">
+                          <Badge className={`uppercase text-[10px] px-2 py-0.5 ${entry.status === 'pending' ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' :
+                            entry.status === 'resubmitted' ? 'bg-orange-500/20 text-orange-400 border-orange-500/50 shadow-[0_0_10px_rgba(249,115,22,0.4)] animate-pulse' :
+                              entry.status === 'approved' ? 'bg-green-500/20 text-green-400 border-green-500/30' :
+                                entry.status === 'manager_approved' ? 'bg-blue-500/20 text-blue-400 border-blue-500/30' :
+                                  entry.status === 'on_hold' ? 'bg-orange-500/20 text-orange-400 border-orange-500/30' :
+                                    'bg-red-500/20 text-red-400 border-red-500/30'
+                            } border`}>
+                            {entry.status ? entry.status.replace('_', ' ') : 'pending'}
+                          </Badge>
+                          {entry.pmsId ? (
+                            <Badge variant="outline" className="text-[9px] bg-indigo-500/10 text-indigo-400 border-indigo-500/20">
+                              <Target className="w-2.5 h-2.5 mr-1" /> PLANNED
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="text-[9px] bg-amber-500/10 text-amber-400 border-amber-500/20">
+                              <Zap className="w-2.5 h-2.5 mr-1" /> MANUAL
+                            </Badge>
+                          )}
+                        </div>
                     </div>
 
                     {/* LMS Hours Summary (if any) */}
